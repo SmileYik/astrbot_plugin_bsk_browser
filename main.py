@@ -931,6 +931,27 @@ class BskBrowserPlugin(Star):
             return await self._run_tool(tool, event, args)
         except BskError as exc:
             diag = exc.format_diagnostic()
+            reason = getattr(exc, "reason", "") or ""
+            code = getattr(exc, "code", "") or ""
+            if reason == "observation_required":
+                return self._fail(
+                    f"【操作受阻】{_ACTION_LABEL.get(tool, tool)}被浏览器权限策略拒绝（需要先建立有效的页面观察上下文）。\n"
+                    "【原因说明】页面可能发生过导航或操作后尚未同步控制状态。\n"
+                    "【推荐后续动作】\n"
+                    '- 请优先调用 bsk_session(action="sync") 同步页面并激活控制权，然后再继续操作。'
+                )
+            if code == "ref_stale_after_sync":
+                return self._fail(
+                    f"【目标已失效】{_ACTION_LABEL.get(tool, tool)}失败：{exc.friendly}{diag}"
+                )
+            if reason in ("ref_not_found", "selector_not_found"):
+                return self._fail(
+                    f"【目标未找到】{_ACTION_LABEL.get(tool, tool)}失败：目标元素不存在或已失效。\n"
+                    "【原因说明】页面结构发生改变或发生了跳转，旧的 @eN 元素编号已作废。\n"
+                    "【推荐后续动作】\n"
+                    '- 调用 bsk_inspect(action="observe") 或 bsk_inspect(action="observe", query="关键词") 查看页面最新元素编号；\n'
+                    '- 若页面发生跳转，推荐调用 bsk_session(action="sync") 同步控制权。'
+                )
             return self._fail(
                 f"{_ACTION_LABEL.get(tool, tool)}失败：{exc.friendly}{diag}"
             )
@@ -1144,7 +1165,7 @@ class BskBrowserPlugin(Star):
 
     @staticmethod
     def _render_nav(verb: str, nav: dict) -> str:
-        """渲染导航/等待的结果。
+        """渲染导航/等待的结果（采用三段式格式）。
 
         ``reached`` 可以是 ``"timeout"`` —— 那是**结果不是错误**
         （TOOL-SPEC §1.2 明说），所以这里必须如实转达，并且**不能**写成
@@ -1155,24 +1176,30 @@ class BskBrowserPlugin(Star):
         session = nav.get("session") or ""
 
         if reached == "timeout":
-            head = (
+            status_text = (
                 f"{verb}，但页面在超时时间内没有到达指定的加载阶段"
                 "（这是等待结果，不是命令失败：页面很可能还在加载）。"
             )
         elif reached:
-            head = f"{verb}（页面已到达 {reached} 阶段）。"
+            status_text = f"{verb}（页面已到达 {reached} 阶段）。"
         else:
-            head = f"{verb}。"
+            status_text = f"{verb}。"
 
-        lines = [head]
+        summary_parts = []
         if url:
-            lines.append(f"当前地址：{url}")
+            summary_parts.append(f"当前地址：{url}")
         if session:
-            lines.append(f"会话：{session}")
-        lines.append(
-            "页面内容与元素编号已更新；"
-            "接着请用 bsk_session(action=\"sync\") 同步页面并获取最新元素编号。"
-        )
+            summary_parts.append(f"会话：{session}")
+        summary_text = "，".join(summary_parts) if summary_parts else "无"
+
+        lines = [
+            f"【状态】{status_text}",
+            f"【结果摘要】{summary_text}",
+            "【推荐后续动作】\n"
+            '- 调用 bsk_inspect(action="observe") 查看当前页面内容与元素大纲；\n'
+            '- 若需直接定位目标元素，调用 bsk_inspect(action="observe", query="关键词")；\n'
+            '- 页面内容已更新，后续若进行复杂交互操作，请优先调用 bsk_session(action="sync") 确保控制权同步。'
+        ]
         return "\n".join(lines)
 
     # --- bsk_inspect ---------------------------------------------------
@@ -1413,7 +1440,13 @@ class BskBrowserPlugin(Star):
             )
 
         observation = await self.service.observe(key, **forward)
-        text = self.service.render_page(observation)
+        text = self.service.render_page(
+            observation,
+            query=args.get("query", ""),
+            offset=args.get("offset", 0),
+            limit=args.get("limit", 30),
+            view=args.get("view", "auto"),
+        )
         if ignored:
             text += (
                 "\n（注意：这次传入的 "
@@ -1582,28 +1615,21 @@ class BskBrowserPlugin(Star):
 
     @staticmethod
     def _render_interact(action: str, result: dict) -> str:
-        """渲染交互结果。
+        """渲染交互结果（采用统一三段式结构）。
 
         ``service.interact`` 的返回是"通用字段 + 该 action 的结果字段"的
         并集，字段名原样来自 bsk 载荷（不重映射）。这里只挑几个通用字段说
         人话，其余原样附上，避免模型因为看不到回执而怀疑操作没生效。
         """
-        lines = [f"已执行 {action}。"]
-        session = result.get("session")
-        if session:
-            lines.append(f"会话：{session}")
+        status_line = f"【状态】已执行 {action}。"
+
+        summary_items: list[str] = []
         target = result.get("target")
         if target:
-            lines.append(f"目标元素：{target}")
-        if result.get("auto_scrolled"):
-            lines.append("（注意：目标元素原先位于视口外，已自动将其滚动至视口中心并完成操作。）")
-        if result.get("auto_synced"):
-            lines.append("（提示：检测到页面控制上下文未同步，已在后台自动执行 sync 补救重试；注意：后续在页面跳转或导航后，请优先主动调用 bsk_session(action='sync') 同步页面。）")
-        if result.get("changed"):
-            lines.append(
-                "这个动作会改变页面，接下来请用 bsk_inspect(action=\"observe\") "
-                "确认结果（页面变化后元素编号会变，不要沿用旧的 @eN）。"
-            )
+            summary_items.append(f"目标元素：{target}")
+        session = result.get("session")
+        if session:
+            summary_items.append(f"会话：{session}")
 
         extra = {
             name: value
@@ -1613,7 +1639,21 @@ class BskBrowserPlugin(Star):
         }
         if extra:
             rendered = "、".join(f"{name}={value!r}" for name, value in extra.items())
-            lines.append(f"浏览器返回的其他信息：{rendered}")
+            summary_items.append(f"浏览器返回信息：{rendered}")
+
+        summary_line = f"【结果摘要】{'，'.join(summary_items) if summary_items else '操作已发送'}"
+
+        lines = [status_line, summary_line]
+        if result.get("auto_scrolled"):
+            lines.append("（注意：目标元素原先位于视口外，已自动将其滚动至视口中心并完成操作。）")
+        if result.get("auto_synced"):
+            lines.append("（提示：检测到页面控制上下文未同步，已在后台自动执行 sync 补救重试；注意：后续在页面跳转或导航后，请优先主动调用 bsk_session(action='sync') 同步页面。）")
+
+        lines.append(
+            "【推荐后续动作】\n"
+            '- 本操作可能改变页面结构或引起跳转，推荐调用 bsk_inspect(action="observe") 确认最新状态（旧 @eN 已失效，不要沿用）；\n'
+            '- 若页面发生跳转，推荐优先调用 bsk_session(action="sync") 建立控制权。'
+        )
         return "\n".join(lines)
 
     # --- bsk_tabs ------------------------------------------------------
@@ -1814,14 +1854,14 @@ class BskBrowserPlugin(Star):
 
     @filter.llm_tool("bsk_inspect")
     async def bsk_inspect(self, event: AstrMessageEvent, **kwargs):
-        """读取页面状态：正文、快照、HTML、截图、控制台与网络日志。
+        """读取页面状态：大纲/元素/正文、快照、HTML、截图、控制台与网络日志。
 
         action 取 observe / snapshot / html / screenshot / console / network。
-        读页面**优先用 observe**（最常用，给出正文与 @eN 元素编号）；
+        读页面优先用 observe（最常用，大页面自适应输出结构大纲；支持 query 关键词快速定位元素、
+        offset/limit 范围切片浏览，及 view 切换 outline/elements/text 视图）；
         snapshot 是无游标的静态可达性树；html 取原始 HTML（有字节上限）；
-        screenshot 只回文字描述、**不会把图片发给用户**；console / network 支持
-        since 游标增量读。
-        要抓包、看接口返回、控制请求流量，请改用 bsk_debug。
+        screenshot 只回文字描述、不会把图片发给用户；console / network 支持
+        since 游标增量读。要抓包、控制流量改用 bsk_debug。
         """
         return await self._dispatch("bsk_inspect", event, kwargs)
 
@@ -1865,8 +1905,7 @@ class BskBrowserPlugin(Star):
         select / press。target 支持快照引用（如 @e3）或 CSS 选择器；
         fill 还要 value，select 还要 values，press 必填 key。
         scroll-to 带连字符（不是 scroll_to）。
-        注意：交互操作依赖控制权上下文。若此前进行了页面导航或页面跳转，请先调用 bsk_session(action='sync') 同步页面控制权。
-        操作后请 observe 一次确认结果。
+        操作后推荐用 bsk_inspect(action='observe') 确认结果；若页面跳转请优先调用 bsk_session(action='sync') 同步控制权。
         """
         return await self._dispatch("bsk_interact", event, kwargs)
 

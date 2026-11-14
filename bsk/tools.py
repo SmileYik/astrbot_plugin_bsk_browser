@@ -523,7 +523,6 @@ _DEBUG_ONLY_PROPS: dict[str, Any] = {
     "run_id": _p("string", _DEBUG_PROPERTY_DESCRIPTIONS["run_id"]),
     "name": _p("string", _DEBUG_PROPERTY_DESCRIPTIONS["name"]),
     "part": _p("string", _DEBUG_PROPERTY_DESCRIPTIONS["part"], enum=DEBUG_PART_VALUES),
-    "offset": _p("number", _DEBUG_PROPERTY_DESCRIPTIONS["offset"]),
     "max_chars": _p("number", _DEBUG_PROPERTY_DESCRIPTIONS["max_chars"]),
     "pointer": _p("string", _DEBUG_PROPERTY_DESCRIPTIONS["pointer"]),
 }
@@ -609,10 +608,25 @@ TOOL_SCHEMAS: dict[str, dict] = {
                 "console/network：增量游标，按 ID 去重，>=0。"
                 "要按 offset 翻页的抓包分析请用 bsk_debug。",
             ),
-            "limit": _p("number", "console/network：最多返回多少条，必须大于 0。"),
+            "limit": _p("number", "observe/console/network：最多返回多少条，范围 1..100，默认 30。"),
             "max_text_chars": _p("number", "console/network：每条文本最多多少字符，必须大于 0。"),
             "include_stack": _p("boolean", "console：是否附带结构化调用栈。"),
             "ref": _p("string", _HTML_REF_PROP["description"] + " screenshot 也用它裁剪截图。"),
+            "query": _p(
+                "string",
+                "observe：关键词模糊搜索。直接在页面全部元素（名称/角色/链接）与文本中检索，"
+                "精准定位匹配项的 @eN 编号，跳过大纲直出结果，无需盲目翻页。",
+            ),
+            "offset": _p(
+                "number",
+                "observe：切片起始序号（>=0），用于分段浏览长页面的元素或正文文本。默认 0。",
+            ),
+            "view": _p(
+                "string",
+                "observe：查看视角。auto（默认自适应，元素少于30直接展示，否则给大纲）、"
+                "outline（仅结构大纲）、elements（可交互元素列表）、text（页面正文）。",
+                enum=["auto", "outline", "elements", "text"],
+            ),
         },
     ),
     "bsk_debug": _schema(
@@ -620,18 +634,15 @@ TOOL_SCHEMAS: dict[str, dict] = {
         {
             "session": _SESSION_PROP,
             "tab_id": _TAB_ID_PROP,
-            # since / limit 是**跨工具共用**的：bsk_inspect 的 console/network 与
-            # bsk_debug 的 console/pages 都靠它俩增量翻页（service.py 的
-            # DEBUG_VALUE_FLAGS 里有它们，_validate_debug 也按 _DEBUG_RANGES 校验）。
-            # 所以它们**不能**只挂在 bsk_inspect 上 —— 那会让 debug 的
-            # console/pages 失去游标能力，且 _validate_debug 里「since 禁用于
-            # performance/aggregate/duplicates」那条规则永远无法触发。
+            # since / limit / offset 是**跨工具共用**的：bsk_inspect 的 observe/console/network 与
+            # bsk_debug 的 console/pages/performance 都靠它们翻页。
             "since": _p(
                 "number",
                 "console/pages：增量游标，按 ID 去重，>=0。"
                 "performance/aggregate/duplicates 不接受 since，请改用 offset。",
             ),
             "limit": _p("number", "列表类 action：最多返回多少条，范围 1..100。"),
+            "offset": _p("number", _DEBUG_PROPERTY_DESCRIPTIONS["offset"]),
             **_DEBUG_ONLY_PROPS,
         },
     ),
@@ -761,14 +772,15 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "bsk_page": (
         "在 Agent Window 的当前标签页上导航与等待。action 取 navigate / back / forward / "
         "reload / wait。navigate 必填 url；reload 可加 hard 绕缓存；"
-        "wait 只等页面生命周期事件、不做任何导航（适合点了会跳转的链接之后用）。"
-        "页面明显变化后要重新 observe，再复用 ref。"
+        "wait 只等页面生命周期事件、不做任何导航。页面变化或跳转后，推荐优先调用 "
+        "bsk_session(action='sync') 同步控制权，或用 bsk_inspect(action='observe') 查看最新内容。"
     ),
     "bsk_inspect": (
-        "读取页面状态。action 取 observe / snapshot / html / screenshot / console / "
-        "network。优先 observe，其次 snapshot，再考虑有上限的 html；要看视觉效果用 "
-        "screenshot。console/network 支持 since/limit/max_text_chars 游标增量读。"
-        "需要抓包、网络规则、重放等调试能力时改用 bsk_debug。"
+        "读取页面状态。action 取 observe / snapshot / html / screenshot / console / network。"
+        "优先 observe（最常用，大页面自适应输出结构大纲；支持 query 关键词快速定位元素、"
+        "offset/limit 范围切片浏览，及 view 切换 outline/elements/text 视图）。"
+        "snapshot 是无游标静态树；html 取原始 HTML（有上限）；screenshot 回文字描述；"
+        "console/network 支持 since/limit 增量读。抓包与网络控制改用 bsk_debug。"
     ),
     "bsk_debug": (
         "调试与网络流量控制：抓包、分析、导出证据，以及显式控制请求。"
@@ -1323,6 +1335,25 @@ def _validate_inspect(ctx: _Ctx) -> dict:
             )
         max_depth = ctx.as_int("max_depth")
         max_tokens = ctx.as_int("max_tokens")
+
+        # observe 专属的新参数
+        query = ctx.as_str("query")
+        offset = ctx.as_int("offset")
+        limit = ctx.as_int("limit")
+        view = ctx.as_str("view")
+
+        if action == "snapshot":
+            for key in ("query", "offset", "limit", "view"):
+                if ctx.given(key):
+                    ctx.fail(f"{ctx.where()} 不接受 {key}：它只对 observe 有意义。")
+
+        if offset is not None and offset < 0:
+            ctx.fail(f"{ctx.where()} 的 offset 必须是非负数（>= 0），收到的是 {offset}。")
+        if limit is not None and (limit < 1 or limit > 100):
+            ctx.fail(f"{ctx.where()} 的 limit 必须在 1..100 之间，收到的是 {limit}。")
+        if view and view.lower() not in ("auto", "outline", "elements", "text"):
+            ctx.fail(f"{ctx.where()} 的 view 必须是 auto/outline/elements/text 之一，收到的是 {view!r}。")
+
         ctx.check_known()
         out: dict[str, Any] = {"tab_id": tab_id}
         if ctx.has("cursor"):
@@ -1336,10 +1367,18 @@ def _validate_inspect(ctx: _Ctx) -> dict:
             out["max_depth"] = max_depth
         if max_tokens is not None:
             out["max_tokens"] = max_tokens
+        if query:
+            out["query"] = query
+        if offset is not None:
+            out["offset"] = offset
+        if limit is not None:
+            out["limit"] = limit
+        if view:
+            out["view"] = view.lower()
         return out
 
     if action == "html":
-        for key in ("cursor", "max_depth", "max_tokens"):
+        for key in ("cursor", "max_depth", "max_tokens", "query", "offset", "view"):
             if ctx.given(key):
                 ctx.fail(
                     f"{ctx.where()} 不接受 {key}：它只对 observe/snapshot 有意义。"
@@ -1361,7 +1400,7 @@ def _validate_inspect(ctx: _Ctx) -> dict:
         return out
 
     if action == "screenshot":
-        for key in ("cursor", "max_depth", "max_tokens", "max_bytes"):
+        for key in ("cursor", "max_depth", "max_tokens", "max_bytes", "query", "offset", "view"):
             if ctx.given(key):
                 ctx.fail(f"{ctx.where()} 不接受 {key}：它不属于 screenshot。")
         ref = ctx.as_str("ref").strip()
@@ -1377,7 +1416,7 @@ def _validate_inspect(ctx: _Ctx) -> dict:
                     "pointer", "run_id", "id", "rule", "replay", "slow_ms", "window_ms",
                     "part", "state", "kind", "fields", "wait_ms", "command_id", "output",
                     "name", "method", "resource_type", "status", "url",
-                    "include_controlled"):
+                    "include_controlled", "query", "view"):
             if ctx.given(key):
                 ctx.fail(
                     f"{ctx.where()} 不接受 {key}：它属于 bsk_debug 或 observe/snapshot，"
@@ -1399,7 +1438,7 @@ def _validate_inspect(ctx: _Ctx) -> dict:
                     "pointer", "run_id", "id", "rule", "replay", "slow_ms", "window_ms",
                     "part", "state", "kind", "fields", "wait_ms", "command_id", "output",
                     "name", "method", "resource_type", "status", "url",
-                    "include_controlled", "include_stack"):
+                    "include_controlled", "include_stack", "query", "view"):
             if ctx.given(key):
                 ctx.fail(
                     f"{ctx.where()} 不接受 {key}：它属于 bsk_debug 或 console，"

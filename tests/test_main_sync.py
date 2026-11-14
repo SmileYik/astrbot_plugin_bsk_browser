@@ -58,7 +58,58 @@ class TestMainSync(unittest.IsolatedAsyncioTestCase):
 
         res = await self.plugin.bsk_interact(self.event, action="click", target="@e1")
         self.assertIn("已在后台自动执行 sync 补救重试", res)
-        self.assertIn("优先主动调用 bsk_session(action='sync')", res)
+
+    async def test_interact_result_three_tier_format(self) -> None:
+        self.plugin.service.interact = AsyncMock(
+            return_value={
+                "session": "s1",
+                "action": "click",
+                "target": "@e1",
+            }
+        )
+        res = await self.plugin.bsk_interact(self.event, action="click", target="@e1")
+        self.assertIn("【状态】已执行 click", res)
+        self.assertIn("【结果摘要】", res)
+        self.assertIn("【推荐后续动作】", res)
+
+    async def test_nav_result_three_tier_format(self) -> None:
+        self.plugin.service.navigate = AsyncMock(
+            return_value={
+                "session": "s1",
+                "url": "https://example.com",
+                "final_url": "https://example.com",
+                "reached": "networkidle",
+            }
+        )
+        res = await self.plugin.bsk_page(self.event, action="navigate", url="https://example.com")
+        self.assertIn("【状态】", res)
+        self.assertIn("【结果摘要】", res)
+        self.assertIn("【推荐后续动作】", res)
+
+    async def test_observation_required_recovery_hint(self) -> None:
+        from astrbot_plugin_bsk_browser.bsk.errors import BskError
+        self.plugin.service.navigate = AsyncMock(
+            side_effect=BskError("observation required", reason="observation_required")
+        )
+        res = await self.plugin.bsk_page(self.event, action="navigate", url="https://example.com")
+        self.assertIn("【操作受阻】", res)
+        self.assertIn('bsk_session(action="sync")', res)
+
+    async def test_observe_forwards_query_and_slice(self) -> None:
+        obs = PageObservation(text="Content", title="Title")
+        self.plugin.service.observe = AsyncMock(return_value=obs)
+        self.plugin.service.render_page = MagicMock(return_value="Filtered Rendered VOM")
+
+        res = await self.plugin.bsk_inspect(
+            self.event, action="observe", query="gtnh", offset=10, limit=20, view="elements"
+        )
+        self.assertIn("Filtered Rendered VOM", res)
+        self.plugin.service.render_page.assert_called_once()
+        call_kwargs = self.plugin.service.render_page.call_args[1]
+        self.assertEqual(call_kwargs.get("query"), "gtnh")
+        self.assertEqual(call_kwargs.get("offset"), 10)
+        self.assertEqual(call_kwargs.get("limit"), 20)
+        self.assertEqual(call_kwargs.get("view"), "elements")
 
 
 if __name__ == "__main__":

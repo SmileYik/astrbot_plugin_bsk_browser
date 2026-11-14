@@ -52,7 +52,14 @@ import re
 
 from .models import PageObservation, PageRef
 
-__all__ = ["parse_observation", "parse_vom_text", "summarize"]
+__all__ = [
+    "parse_observation",
+    "parse_vom_text",
+    "summarize",
+    "render_outline",
+    "filter_elements_and_text",
+    "ADAPTIVE_ELEMENTS_THRESHOLD",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +83,9 @@ MAX_LINE_CHARS = 400
 
 MAX_REFS_SHOWN = 40
 """摘要里最多列出多少个元素。"""
+
+ADAPTIVE_ELEMENTS_THRESHOLD = 30
+"""当页面可交互元素超过此数量时，自适应输出结构大纲。"""
 
 TRUNCATION_NOTE = "……（页面内容过长，已截断）"
 
@@ -426,12 +436,133 @@ def _extract_text_lines(text: str) -> list[str]:
     return out
 
 
+def render_outline(
+    title: str,
+    refs: list[PageRef],
+    text_lines: list[str],
+    viewport: tuple[int, int] | None = None,
+) -> str:
+    """生成页面的宏观骨架与分类统计大纲。"""
+    inputs = [r for r in refs if (r.role or "").lower() in ("textbox", "searchbox", "combobox")]
+    buttons = [r for r in refs if (r.role or "").lower() in ("button",)]
+    links = [r for r in refs if (r.role or "").lower() in ("link",)]
+    other = [r for r in refs if r not in inputs and r not in buttons and r not in links]
+
+    lines: list[str] = []
+    lines.append("【页面结构与统计大纲】")
+    if title:
+        lines.append(f"标题：{title}")
+    if viewport:
+        lines.append(f"视口：{viewport[0]}x{viewport[1]}（CSS px）")
+
+    total_refs = len(refs)
+    lines.append(
+        f"可交互元素共 {total_refs} 个（输入框: {len(inputs)}, 按钮: {len(buttons)}, 链接: {len(links)}, 其他: {len(other)}）"
+    )
+    lines.append(f"正文文本共 {len(text_lines)} 段")
+
+    if refs:
+        lines.append("\n【前置关键元素预览】")
+        for ref in refs[:5]:
+            role = ref.role or "未知角色"
+            target = f"  → {ref.target}" if ref.target else ""
+            lines.append(f'  @{ref.ref} {role} "{ref.name}"{target}')
+        if total_refs > 5:
+            lines.append(f"  ……还有 {total_refs - 5} 个元素未列出")
+
+    if text_lines:
+        lines.append("\n【正文前置预览】")
+        for t in text_lines[:3]:
+            lines.append(f"  {t}")
+        if len(text_lines) > 3:
+            lines.append(f"  ……还有 {len(text_lines) - 3} 段正文未列出")
+
+    lines.append(
+        "\n【推荐后续动作】\n"
+        "- 快速定位：若需寻找特定按钮/文章/链接，可调用 bsk_inspect(action=\"observe\", query=\"关键词\")；\n"
+        "- 分段查看元素：调用 bsk_inspect(action=\"observe\", view=\"elements\", offset=0, limit=30)；\n"
+        "- 分段阅读正文：调用 bsk_inspect(action=\"observe\", view=\"text\", offset=0, limit=30)。"
+    )
+    return "\n".join(lines)
+
+
+def filter_elements_and_text(
+    refs: list[PageRef],
+    text_lines: list[str],
+    *,
+    query: str = "",
+    offset: int = 0,
+    limit: int = 30,
+    view: str = "auto",
+) -> tuple[list[PageRef], list[str], bool]:
+    """根据关键词 query 或 offset/limit/view 筛选元素与正文。
+
+    Args:
+        refs: 页面元素列表。
+        text_lines: 页面正文行列表。
+        query: 关键词（不区分大小写模糊匹配）。
+        offset: 切片起始位置（≥ 0）。
+        limit: 切片数量上限（1..100）。
+        view: 视图模式（auto / outline / elements / text）。
+
+    Returns:
+        (filtered_refs, filtered_texts, has_more)
+    """
+    clean_query = str(query or "").strip().lower()
+    norm_view = str(view or "auto").strip().lower()
+    start = max(0, int(offset or 0))
+    count = max(1, min(100, int(limit or 30)))
+
+    # 1) 若提供了 query：强过滤模式（仅保留匹配条目，不混入无关内容）
+    if clean_query:
+        matched_refs = []
+        for r in refs:
+            target_str = f"{r.name} {r.target} {r.role}".lower()
+            if clean_query in target_str:
+                matched_refs.append(r)
+        matched_texts = [t for t in text_lines if clean_query in t.lower()]
+
+        if norm_view == "elements":
+            matched_texts = []
+        elif norm_view == "text":
+            matched_refs = []
+
+        slice_refs = matched_refs[start : start + count]
+        slice_texts = matched_texts[start : start + count]
+        has_more = (len(matched_refs) > start + count) or (len(matched_texts) > start + count)
+        return slice_refs, slice_texts, has_more
+
+    # 2) 未提供 query：根据 view 与 offset/limit 单维度切片
+    if norm_view == "elements":
+        slice_refs = refs[start : start + count]
+        has_more = len(refs) > start + count
+        return slice_refs, [], has_more
+
+    if norm_view == "text":
+        slice_texts = text_lines[start : start + count]
+        has_more = len(text_lines) > start + count
+        return [], slice_texts, has_more
+
+    # view == "auto" 且指定了 offset：默认切片 elements
+    if start > 0:
+        slice_refs = refs[start : start + count]
+        has_more = len(refs) > start + count
+        return slice_refs, [], has_more
+
+    # 默认全部返回（交给外层按预算或阈值处理）
+    return refs, text_lines, False
+
+
 def summarize(
     text: str,
     title: str,
     refs: list[PageRef],
     *,
     max_chars: int = 3000,
+    query: str = "",
+    offset: int = 0,
+    limit: int = 30,
+    view: str = "auto",
 ) -> str:
     """生成给 LLM 看的紧凑页面摘要。
 
@@ -439,24 +570,21 @@ def summarize(
         text: VOM 文本原文，用于抽取可见正文。
         title: 页面标题，来自 :func:`parse_vom_text`。
         refs: 可交互元素列表，来自 :func:`parse_vom_text`。
-        max_chars: 返回字符串的最大字符数（不是字节数）。默认 3000 字符，
-            对这个规模的中文文本约合 2000 左右 token，塞进上下文是安全的。
+        max_chars: 返回字符串的最大字符数（不是字节数）。默认 3000 字符。
+        query: 关键词搜索。
+        offset: 范围起始序号。
+        limit: 范围限制条数。
+        view: 查看视角（auto / outline / elements / text）。
 
     Returns:
-        摘要文本。长度保证不超过 ``max_chars`` —— 这一点是硬保证，
-        因为整棵 VOM 树可能有几万字符，直接塞给 LLM 会撑爆上下文。
-        一旦发生截断，末尾一定带 :data:`TRUNCATION_NOTE` 提示
-        （``max_chars`` 小到连提示都放不下时例外，此时只做硬截断）。
-
-    Note:
-        本函数是纯函数，不改动传入的 ``refs``，也不依赖任何全局状态。
+        摘要文本。长度保证不超过 ``max_chars``。
     """
     # --- 参数归一化：外部传进来的东西可能是任何类型 ---
     try:
-        limit = int(max_chars)
+        max_limit = int(max_chars)
     except (TypeError, ValueError):
-        limit = 3000
-    if limit <= 0:
+        max_limit = 3000
+    if max_limit <= 0:
         return ""
 
     if not isinstance(text, str):
@@ -471,14 +599,103 @@ def summarize(
         refs = []
     safe_refs = [r for r in refs if isinstance(r, PageRef)]
 
-    # --- 头部：标题 / 视口 / 元素清单 ---
+    text_lines = _extract_text_lines(text)
+    viewport = None
+    mv = _RE_VIEW.search(text) if text else None
+    if mv:
+        viewport = (int(mv.group(1)), int(mv.group(2)))
+
+    clean_query = str(query or "").strip()
+    norm_view = str(view or "auto").strip().lower()
+    start_offset = max(0, int(offset or 0))
+
+    # --- 1) 关键词检索模式（优先级最高，不论页面多长直接越过大纲） ---
+    if clean_query:
+        matched_refs, matched_texts, has_more = filter_elements_and_text(
+            safe_refs, text_lines, query=clean_query, offset=start_offset, limit=limit, view=norm_view
+        )
+        if not matched_refs and not matched_texts:
+            return (
+                f'【搜索结果】未在当前页面中找到与 "{clean_query}" 匹配的可交互元素或文本。\n\n'
+                "【推荐后续动作】\n"
+                "- 尝试更简短的关键词重新调用 bsk_inspect(action=\"observe\", query=\"新词\")；\n"
+                "- 查看页面完整大纲：调用 bsk_inspect(action=\"observe\", view=\"outline\")；\n"
+                "- 分段浏览全部元素：调用 bsk_inspect(action=\"observe\", view=\"elements\", offset=0, limit=30)。"
+            )
+
+        res_lines: list[str] = [
+            f'【搜索结果："{clean_query}"】（命中元素: {len(matched_refs)} 个，命中正文: {len(matched_texts)} 段）'
+        ]
+        if title:
+            res_lines.append(f"页面标题：{title}")
+        if matched_refs:
+            res_lines.append("\n匹配的可交互元素：")
+            for ref in matched_refs:
+                role = ref.role or "未知角色"
+                target = f"  → {ref.target}" if ref.target else ""
+                res_lines.append(f'  @{ref.ref} {role} "{ref.name}"{target}')
+        if matched_texts:
+            res_lines.append("\n匹配的正文文本：")
+            for t in matched_texts:
+                res_lines.append(f"  {t}")
+        if has_more:
+            res_lines.append(f"\n……（还有更多匹配项未列出，可传 offset={start_offset + len(matched_refs)} 查看下一页）")
+
+        res_lines.append(
+            "\n【推荐后续动作】\n"
+            "- 如找到目标，请用 @ref 编号进行交互（如 bsk_interact(action=\"click\", target=\"@eN\")）；\n"
+            "- 若未找到，可尝试更换关键词或查看大纲。"
+        )
+        out = "\n".join(res_lines)
+        return out[:max_limit] if len(out) > max_limit else out
+
+    # --- 2) 大纲视图判定 ---
+    if norm_view == "outline" or (
+        norm_view == "auto" and start_offset == 0 and len(safe_refs) > ADAPTIVE_ELEMENTS_THRESHOLD
+    ):
+        return render_outline(title, safe_refs, text_lines, viewport=viewport)
+
+    # --- 3) 显式分片模式 (view="elements" / "text" 或 offset > 0) ---
+    if norm_view in ("elements", "text") or start_offset > 0:
+        slice_refs, slice_texts, has_more = filter_elements_and_text(
+            safe_refs, text_lines, offset=start_offset, limit=limit, view=norm_view
+        )
+        res_lines = []
+        if norm_view == "text":
+            res_lines.append(f"【页面正文切片 (offset={start_offset}, 共 {len(slice_texts)} 段)】")
+            if title:
+                res_lines.append(f"标题：{title}")
+            for t in slice_texts:
+                res_lines.append(t)
+            if has_more:
+                res_lines.append(f"\n……（后文还有更多段落，可调用 offset={start_offset + len(slice_texts)} 继续阅读）")
+            res_lines.append("\n【推荐后续动作】继续阅读或调用 bsk_inspect(action=\"observe\", view=\"elements\") 切换至元素视图。")
+        else:
+            res_lines.append(f"【可交互元素切片 (offset={start_offset}, 共 {len(slice_refs)} 个)】")
+            if title:
+                res_lines.append(f"标题：{title}")
+            if viewport:
+                res_lines.append(f"视口：{viewport[0]}x{viewport[1]}（CSS px）")
+            for ref in slice_refs:
+                role = ref.role or "未知角色"
+                target = f"  → {ref.target}" if ref.target else ""
+                res_lines.append(f'  @{ref.ref} {role} "{ref.name}"{target}')
+            if has_more:
+                res_lines.append(f"\n……（后文还有更多元素，可调用 offset={start_offset + len(slice_refs)} 继续查看）")
+            res_lines.append(
+                "\n【推荐后续动作】\n"
+                "- 使用目标编号进行交互：如 bsk_interact(action=\"click\", target=\"@eN\")；\n"
+                "- 检索特定元素：调用 bsk_inspect(action=\"observe\", query=\"关键词\")。"
+            )
+        out = "\n".join(res_lines)
+        return out[:max_limit] if len(out) > max_limit else out
+
+    # --- 4) 普通全量视图 (≤ 30 元素的短页面 auto 视图) ---
     header_lines: list[str] = []
     if title:
         header_lines.append(f"标题：{title}")
-
-    mv = _RE_VIEW.search(text) if text else None
-    if mv:
-        header_lines.append(f"视口：{mv.group(1)}x{mv.group(2)}（CSS px）")
+    if viewport:
+        header_lines.append(f"视口：{viewport[0]}x{viewport[1]}（CSS px）")
 
     if safe_refs:
         header_lines.append(f"可交互元素（共 {len(safe_refs)} 个，用 @ref 引用）：")
@@ -494,14 +711,13 @@ def summarize(
 
     header = "\n".join(header_lines)
 
-    # --- 正文：按行填充，塞不下就停 ---
-    # 预算里先给截断提示留出位置，否则提示本身会把总长顶出上限。
-    budget = limit - len(header) - len(TRUNCATION_NOTE) - 2
+    # 正文预算填充
+    budget = max_limit - len(header) - len(TRUNCATION_NOTE) - 2
     body: list[str] = []
     used = 0
     truncated = False
-    for line in _extract_text_lines(text):
-        cost = len(line) + 1  # +1 是行尾换行
+    for line in text_lines:
+        cost = len(line) + 1
         if used + cost > budget:
             truncated = True
             break
@@ -514,7 +730,6 @@ def summarize(
     if truncated:
         result += "\n" + TRUNCATION_NOTE
 
-    # 最后一道保险：无论如何都不许超过 max_chars
-    if len(result) > limit:
-        result = result[:limit]
+    if len(result) > max_limit:
+        result = result[:max_limit]
     return result

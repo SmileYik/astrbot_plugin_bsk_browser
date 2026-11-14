@@ -694,13 +694,25 @@ class BskService:
 
         return observation
 
-    def render_page(self, observation: PageObservation) -> str:
+    def render_page(
+        self,
+        observation: PageObservation,
+        *,
+        query: str = "",
+        offset: int = 0,
+        limit: int = 30,
+        view: str = "auto",
+    ) -> str:
         """把页面观察渲染成给模型看的文本，并做长度限制。"""
         return summarize(
             observation.text,
             observation.title,
             observation.refs,
             max_chars=self.settings.max_page_chars,
+            query=query,
+            offset=offset,
+            limit=limit,
+            view=view,
         )
 
     # ------------------------------------------------------------------

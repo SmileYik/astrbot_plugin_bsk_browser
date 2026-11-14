@@ -3041,6 +3041,17 @@ class TestInteractAutoScroll(unittest.IsolatedAsyncioTestCase):
         cmds = [c[0] for c in runner.calls]
         self.assertEqual(cmds, ["scroll-to"])
 
+    def test_render_page_passes_query_and_view(self) -> None:
+        from bsk.models import PageObservation, PageRef
+        service = BskService(make_settings(screenshot_dir=self.tmp.name), runner=FakeRunner())
+        obs = PageObservation(
+            text='L1 page\nparagraph "正文内容"',
+            refs=[PageRef(ref="e1", role="link", name="测试目标")]
+        )
+        rendered = service.render_page(obs, query="目标", view="elements")
+        self.assertIn("@e1", rendered)
+        self.assertIn("测试目标", rendered)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main(verbosity=2)

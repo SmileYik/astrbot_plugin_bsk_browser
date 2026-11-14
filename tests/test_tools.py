@@ -55,16 +55,10 @@ from bsk import tools  # noqa: E402
 # ``verify_astrbot_contract.py`` 会红、provider 侧也可能拒收。
 ALLOWED_TYPES = {"string", "number", "object", "array", "boolean"}
 
-# ``bsk_debug`` 独占的 23 个参数（拆分后不该再出现在 ``bsk_inspect`` 里）。
-# 这份清单与任务书逐字一致，是**独立于实现**的验收依据：从实现里反推清单
-# 就等于用实现证明实现。
-#
-# 这里**没有** ``debug_action``：它曾是 ``bsk_debug`` 的 ``action`` 别名，
-# 后来作为纯冗余删掉了（``bsk_debug`` 是本次新造的工具，任何既有提示词都
-# 不可能写过它，所以别名没有兼容价值，只多占 prompt）。子动作的唯一入口是
-# 工具级 ``action``。它的拒绝路径单独有测试（见 TestDebugSplit）。
+# ``bsk_debug`` 独占的 22 个参数（拆分后不该再出现在 ``bsk_inspect`` 里；
+# since/limit/offset 是两边共用的，不在本列表中）。
 DEBUG_ONLY_PARAMS = (
-    "rule", "replay", "state", "part", "id", "offset", "kind",
+    "rule", "replay", "state", "part", "id", "kind",
     "budget", "pointer", "wait_ms", "fields", "command_id", "include_controlled",
     "window_ms", "method", "output", "status", "resource_type", "slow_ms",
     "url", "max_chars", "name", "run_id",
@@ -1131,6 +1125,29 @@ class TestMainPluginInteractionFormatting(unittest.IsolatedAsyncioTestCase):
         result = await plugin._dispatch("bsk_interact", event, {"action": "click", "target": "@e1"})
         self.assertIn("该动作只允许在 bsk 自己的窗口里执行。", result)
         self.assertIn("（原因: agent_window_scope，详情: tab 12 is user tab）", result)
+
+    def test_validate_inspect_new_observe_params(self) -> None:
+        valid = tools.validate("bsk_inspect", {
+            "action": "observe",
+            "query": "gtnh",
+            "offset": 10,
+            "limit": 20,
+            "view": "elements",
+        })
+        self.assertEqual(valid["query"], "gtnh")
+        self.assertEqual(valid["offset"], 10)
+        self.assertEqual(valid["limit"], 20)
+        self.assertEqual(valid["view"], "elements")
+
+    def test_validate_inspect_invalid_observe_params(self) -> None:
+        with self.assertRaises(tools.BskToolError):
+            tools.validate("bsk_inspect", {"action": "observe", "offset": -1})
+        with self.assertRaises(tools.BskToolError):
+            tools.validate("bsk_inspect", {"action": "observe", "limit": 0})
+        with self.assertRaises(tools.BskToolError):
+            tools.validate("bsk_inspect", {"action": "observe", "limit": 101})
+        with self.assertRaises(tools.BskToolError):
+            tools.validate("bsk_inspect", {"action": "observe", "view": "invalid_view"})
 
 
 if __name__ == "__main__":

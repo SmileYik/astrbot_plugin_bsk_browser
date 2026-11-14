@@ -505,8 +505,9 @@ class TestSummarize(unittest.TestCase):
     def test_refs_list_is_capped(self) -> None:
         """元素太多时摘要要收敛，不能无限列。"""
         many = [PageRef(f"e{i}", "link", f"第{i}个") for i in range(1, 121)]
-        out = summarize(REAL_VOM_TEXT, "很多元素", many, max_chars=8000)
-        self.assertIn(f"还有 {120 - MAX_REFS_SHOWN} 个元素未列出", out)
+        out = summarize(REAL_VOM_TEXT, "很多元素", many, max_chars=8000, view="elements")
+        self.assertIn("共 30 个", out)
+        self.assertIn("后文还有更多元素", out)
 
     def test_no_refs_message(self) -> None:
         out = summarize(REAL_VOM_TEXT, "Example Domain", [], max_chars=3000)
@@ -591,6 +592,115 @@ class TestBodyExtraction(unittest.TestCase):
         text = vom("@vom 1", "  generic 裸文本内容")
         out = summarize(text, "", [], max_chars=3000)
         self.assertIn("裸文本内容", out)
+
+
+# ---------------------------------------------------------------------------
+# 7) 页面大纲生成与自适应呈现
+# ---------------------------------------------------------------------------
+
+
+class TestOutlineAndAdaptiveSummarize(unittest.TestCase):
+
+    def test_render_outline_structure(self) -> None:
+        from bsk.pages import render_outline
+        refs = [
+            PageRef(ref="e1", role="textbox", name="搜索框"),
+            PageRef(ref="e2", role="button", name="百度一下"),
+            PageRef(ref="e3", role="link", name="贴吧"),
+            PageRef(ref="e4", role="checkbox", name="记住我"),
+        ]
+        text_lines = ["段落1", "段落2", "段落3", "段落4"]
+        outline = render_outline("测试标题", refs, text_lines, viewport=(1920, 1080))
+        self.assertIn("测试标题", outline)
+        self.assertIn("1920x1080", outline)
+        self.assertIn("可交互元素共 4 个", outline)
+        self.assertIn("输入框: 1", outline)
+        self.assertIn("按钮: 1", outline)
+        self.assertIn("链接: 1", outline)
+        self.assertIn("正文文本共 4 段", outline)
+        self.assertIn("【推荐后续动作】", outline)
+
+    def test_summarize_adaptive_short_page(self) -> None:
+        refs = [PageRef(ref=f"e{i}", role="link", name=f"链接{i}") for i in range(1, 10)]
+        out = summarize('L1 page\nparagraph "正文内容"', "短页面", refs)
+        self.assertIn("短页面", out)
+        self.assertIn('@e1 link "链接1"', out)
+        self.assertIn('@e9 link "链接9"', out)
+        self.assertNotIn("大纲统计", out)
+
+    def test_summarize_adaptive_long_page(self) -> None:
+        refs = [PageRef(ref=f"e{i}", role="link", name=f"链接{i}") for i in range(1, 50)]
+        out = summarize('L1 page\nparagraph "正文内容"', "长页面", refs)
+        self.assertIn("长页面", out)
+        self.assertIn("可交互元素共 49 个", out)
+        self.assertIn("【推荐后续动作】", out)
+        self.assertIn("query", out)
+
+    def test_filter_by_query_matching(self) -> None:
+        from bsk.pages import filter_elements_and_text
+        refs = [
+            PageRef(ref="e1", role="link", name="百度首页"),
+            PageRef(ref="e2", role="link", name="GTNH灰机wiki"),
+            PageRef(ref="e3", role="button", name="提交"),
+        ]
+        texts = ["欢迎来到百度", "GTNH是大型整合包", "无关正文"]
+        matched_refs, matched_texts, has_more = filter_elements_and_text(
+            refs, texts, query="gtnh"
+        )
+        self.assertEqual(len(matched_refs), 1)
+        self.assertEqual(matched_refs[0].ref, "e2")
+        self.assertEqual(len(matched_texts), 1)
+        self.assertEqual(matched_texts[0], "GTNH是大型整合包")
+        self.assertFalse(has_more)
+
+    def test_filter_by_query_zero_matches(self) -> None:
+        from bsk.pages import filter_elements_and_text
+        refs = [PageRef(ref="e1", role="link", name="百度首页")]
+        texts = ["正文内容"]
+        matched_refs, matched_texts, has_more = filter_elements_and_text(
+            refs, texts, query="不存在的词"
+        )
+        self.assertEqual(len(matched_refs), 0)
+        self.assertEqual(len(matched_texts), 0)
+        self.assertFalse(has_more)
+
+    def test_filter_by_offset_limit_elements(self) -> None:
+        from bsk.pages import filter_elements_and_text
+        refs = [PageRef(ref=f"e{i}", role="link", name=f"项{i}") for i in range(100)]
+        texts = ["段落1", "段落2"]
+        matched_refs, matched_texts, has_more = filter_elements_and_text(
+            refs, texts, offset=10, limit=20, view="elements"
+        )
+        self.assertEqual(len(matched_refs), 20)
+        self.assertEqual(matched_refs[0].ref, "e10")
+        self.assertEqual(len(matched_texts), 0)
+        self.assertTrue(has_more)
+
+    def test_filter_by_offset_limit_text(self) -> None:
+        from bsk.pages import filter_elements_and_text
+        refs = [PageRef(ref=f"e{i}", role="link", name=f"项{i}") for i in range(10)]
+        texts = [f"段落{i}" for i in range(50)]
+        matched_refs, matched_texts, has_more = filter_elements_and_text(
+            refs, texts, offset=5, limit=10, view="text"
+        )
+        self.assertEqual(len(matched_refs), 0)
+        self.assertEqual(len(matched_texts), 10)
+        self.assertEqual(matched_texts[0], "段落5")
+        self.assertTrue(has_more)
+
+    def test_summarize_query_bypasses_long_page_outline(self) -> None:
+        refs = [PageRef(ref=f"e{i}", role="link", name=f"普通项{i}") for i in range(50)]
+        refs.append(PageRef(ref="e99", role="link", name="GTNH维基百科"))
+        out = summarize('L1 page\nparagraph "内容"', "长页面", refs, query="维基")
+        self.assertIn("@e99", out)
+        self.assertIn("GTNH维基百科", out)
+        self.assertNotIn("【页面结构与统计大纲】", out)
+
+    def test_summarize_zero_query_matches(self) -> None:
+        refs = [PageRef(ref=f"e{i}", role="link", name=f"普通项{i}") for i in range(50)]
+        out = summarize('L1 page\nparagraph "内容"', "长页面", refs, query="不存在的词汇XYZ")
+        self.assertIn("未在当前页面中找到与", out)
+        self.assertIn("不存在的词汇XYZ", out)
 
 
 if __name__ == "__main__":
