@@ -61,18 +61,18 @@ class TestServiceSync(unittest.IsolatedAsyncioTestCase):
         self.assertIn("--timeout-ms", argv)
         self.assertIn("5000", argv)
 
-    async def test_interact_auto_sync_on_cooperation_sync_required(self) -> None:
+    async def test_interact_auto_sync_retries_css_selector(self) -> None:
         service = BskService.__new__(BskService)
         service._resolve_key = MagicMock(return_value="s1")
-        service._build_interact_args = MagicMock(return_value=(["fill", "@e1", "gtnh"], False))
+        service._build_interact_args = MagicMock(return_value=(["click", "button.submit"], False))
         service._interact_timeout_builtin = MagicMock(return_value=30.0)
         service._timeout = lambda b: b
         service._logger = MagicMock()
         service._with_tab_id = lambda args, tid: args
         service._session_field = lambda k: "s1"
         service._payload_tab_id = lambda d: None
-        service._interact_result = MagicMock(return_value={"value": "gtnh"})
-        service.sync_session = AsyncMock()
+        service._interact_result = MagicMock(return_value={})
+        service.sync_session = AsyncMock(return_value=PageObservation(text="ok"))
 
         from bsk.errors import BskError
         err = BskError("sync required", reason="cooperation_sync_required")
@@ -80,10 +80,34 @@ class TestServiceSync(unittest.IsolatedAsyncioTestCase):
         service.sessions = MagicMock()
         service.sessions.execute = AsyncMock(side_effect=[err, success_res])
 
-        res = await service.interact("s1", "fill", target="@e1", value="gtnh")
+        res = await service.interact("s1", "click", target="button.submit")
         self.assertTrue(res["auto_synced"])
-        service.sync_session.assert_called_once_with("s1", tab_id=None)
         self.assertEqual(service.sessions.execute.call_count, 2)
+
+    async def test_interact_auto_sync_ref_target_raises_stale_ref_guidance(self) -> None:
+        service = BskService.__new__(BskService)
+        service._resolve_key = MagicMock(return_value="s1")
+        service._build_interact_args = MagicMock(return_value=(["fill", "@e15", "gtnh"], False))
+        service._interact_timeout_builtin = MagicMock(return_value=30.0)
+        service._timeout = lambda b: b
+        service._logger = MagicMock()
+        service._with_tab_id = lambda args, tid: args
+        service.sync_session = AsyncMock(return_value=PageObservation(text="new page", title="Search"))
+        service.render_page = MagicMock(return_value="标题：Search\n可交互元素：\n  @e56 textbox")
+
+        from bsk.errors import BskError, BskUserError
+        err = BskError("sync required", reason="cooperation_sync_required")
+        service.sessions = MagicMock()
+        service.sessions.execute = AsyncMock(side_effect=err)
+
+        with self.assertRaises(BskUserError) as cm:
+            await service.interact("s1", "fill", target="@e15", value="gtnh")
+
+        self.assertEqual(cm.exception.code, "ref_stale_after_sync")
+        self.assertIn("@e15", cm.exception.friendly)
+        self.assertIn("@e56 textbox", cm.exception.friendly)
+        # 绝不能发起第二次 execute 重试无效 ref！
+        self.assertEqual(service.sessions.execute.call_count, 1)
 
     async def test_interact_unknown_effect_does_not_auto_sync(self) -> None:
         service = BskService.__new__(BskService)
@@ -112,7 +136,7 @@ class TestServiceSync(unittest.IsolatedAsyncioTestCase):
     async def test_interact_cooperation_sync_retry_fails_once(self) -> None:
         service = BskService.__new__(BskService)
         service._resolve_key = MagicMock(return_value="s1")
-        service._build_interact_args = MagicMock(return_value=(["fill", "@e1", "gtnh"], False))
+        service._build_interact_args = MagicMock(return_value=(["fill", "input.kw", "gtnh"], False))
         service._interact_timeout_builtin = MagicMock(return_value=30.0)
         service._timeout = lambda b: b
         service._logger = MagicMock()
@@ -120,7 +144,7 @@ class TestServiceSync(unittest.IsolatedAsyncioTestCase):
         service._session_field = lambda k: "s1"
         service._payload_tab_id = lambda d: None
         service._interact_result = MagicMock(return_value={"value": "gtnh"})
-        service.sync_session = AsyncMock()
+        service.sync_session = AsyncMock(return_value=PageObservation(text="ok"))
 
         from bsk.errors import BskError
         err1 = BskError("sync required 1", reason="cooperation_sync_required")
@@ -129,7 +153,7 @@ class TestServiceSync(unittest.IsolatedAsyncioTestCase):
         service.sessions.execute = AsyncMock(side_effect=[err1, err2])
 
         with self.assertRaises(BskError) as cm:
-            await service.interact("s1", "fill", target="@e1", value="gtnh")
+            await service.interact("s1", "fill", target="input.kw", value="gtnh")
 
         self.assertEqual(str(cm.exception), "sync required 2")
         service.sync_session.assert_called_once_with("s1", tab_id=None)
@@ -139,7 +163,7 @@ class TestServiceSync(unittest.IsolatedAsyncioTestCase):
         service = BskService.__new__(BskService)
         service._resolve_key = MagicMock(return_value="s1")
         service._build_interact_args = MagicMock(
-            side_effect=lambda act, opts: (["scroll-to", "@e1"], False) if act == "scroll-to" else (["click", "@e1"], False)
+            side_effect=lambda act, opts: (["scroll-to", "button.submit"], False) if act == "scroll-to" else (["click", "button.submit"], False)
         )
         service._interact_timeout_builtin = MagicMock(return_value=30.0)
         service._timeout = lambda b: b
@@ -148,7 +172,7 @@ class TestServiceSync(unittest.IsolatedAsyncioTestCase):
         service._session_field = lambda k: "s1"
         service._payload_tab_id = lambda d: None
         service._interact_result = MagicMock(return_value={})
-        service.sync_session = AsyncMock()
+        service.sync_session = AsyncMock(return_value=PageObservation(text="ok"))
 
         from bsk.errors import BskError
         err_sync = BskError("sync required", reason="cooperation_sync_required")
@@ -157,14 +181,9 @@ class TestServiceSync(unittest.IsolatedAsyncioTestCase):
         click_res = MagicMock(data={"status": "ok"})
 
         service.sessions = MagicMock()
-        # 1. click -> cooperation_sync_required
-        # sync_session runs
-        # 2. click -> element_not_visible
-        # 3. scroll-to -> ok
-        # 4. click -> ok
         service.sessions.execute = AsyncMock(side_effect=[err_sync, err_vis, scroll_res, click_res])
 
-        res = await service.interact("s1", "click", target="@e1")
+        res = await service.interact("s1", "click", target="button.submit")
         self.assertTrue(res["auto_synced"])
         self.assertTrue(res["auto_scrolled"])
         service.sync_session.assert_called_once_with("s1", tab_id=None)

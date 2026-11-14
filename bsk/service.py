@@ -2672,9 +2672,26 @@ class BskService:
             result = await _run_action()
         except BskError as exc:
             if getattr(exc, "reason", "") == "cooperation_sync_required" and getattr(exc, "effect_state", "") != "unknown":
-                self._logger.info("检测到页面控制上下文未同步 (cooperation_sync_required)，尝试自动 sync_session 补救后重试 %s", action)
-                await self.sync_session(session_key, tab_id=tab_id)
+                self._logger.info("检测到页面控制上下文未同步 (cooperation_sync_required)，执行 sync_session 补救")
+                obs = await self.sync_session(session_key, tab_id=tab_id)
                 auto_synced = True
+
+                is_ref = target.startswith("@") or (target.lower().startswith("e") and target[1:].isdigit())
+                if is_ref:
+                    rendered_vom = self.render_page(obs)
+                    from .errors import BskUserError
+
+                    raise BskUserError(
+                        f"目标 {target} 在控制权同步后已失效",
+                        friendly=(
+                            f"操作前检测到页面控制权未同步，已在后台自动执行 sync 完成同步。"
+                            f"由于页面状态已刷新，原元素编号「{target}」已失效。\n"
+                            f"当前页面最新元素如下，请直接使用新编号执行操作：\n{rendered_vom}"
+                        ),
+                        code="ref_stale_after_sync",
+                        reason="ref_not_found",
+                    )
+
                 try:
                     result = await _run_action()
                 except BskError as retry_exc:
@@ -2691,9 +2708,24 @@ class BskService:
                     await _run_scroll()
                 except BskError as scroll_exc:
                     if getattr(scroll_exc, "reason", "") == "cooperation_sync_required" and getattr(scroll_exc, "effect_state", "") != "unknown":
-                        self._logger.info("scroll-to 遇到 cooperation_sync_required，尝试自动 sync_session 补救后重试")
-                        await self.sync_session(session_key, tab_id=tab_id)
+                        self._logger.info("scroll-to 遇到 cooperation_sync_required，执行 sync_session 补救")
+                        obs = await self.sync_session(session_key, tab_id=tab_id)
                         auto_synced = True
+                        is_ref = target.startswith("@") or (target.lower().startswith("e") and target[1:].isdigit())
+                        if is_ref:
+                            rendered_vom = self.render_page(obs)
+                            from .errors import BskUserError
+
+                            raise BskUserError(
+                                f"目标 {target} 在控制权同步后已失效",
+                                friendly=(
+                                    f"操作前检测到页面控制权未同步，已在后台自动执行 sync 完成同步。"
+                                    f"由于页面状态已刷新，原元素编号「{target}」已失效。\n"
+                                    f"当前页面最新元素如下，请直接使用新编号执行操作：\n{rendered_vom}"
+                                ),
+                                code="ref_stale_after_sync",
+                                reason="ref_not_found",
+                            )
                         await _run_scroll()
                     else:
                         raise
