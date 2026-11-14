@@ -239,6 +239,39 @@ class TestPermissionDeniedReasons(unittest.TestCase):
         self.assertIn("bsk_session(action='sync')", err.friendly)
         self.assertEqual(err.reason, "cooperation_sync_required")
 
+    def test_not_found_with_ref_not_found_returns_user_error(self) -> None:
+        err = errors.classify(
+            exit_code=1,
+            code="not_found",
+            message="ref @e15 unknown for tab 1",
+            hint="Observe the current page",
+            reason="ref_not_found",
+        )
+        self.assertIsInstance(err, errors.BskUserError)
+        self.assertNotIsInstance(err, errors.BskSessionGone)
+        self.assertIn("目标元素不存在或已失效", err.friendly)
+
+    def test_not_found_with_selector_not_found_returns_user_error(self) -> None:
+        err = errors.classify(
+            exit_code=1,
+            code="not_found",
+            message="selector did not match",
+            hint="check selector",
+            reason="selector_not_found",
+        )
+        self.assertIsInstance(err, errors.BskUserError)
+        self.assertNotIsInstance(err, errors.BskSessionGone)
+
+    def test_not_found_generic_session_returns_session_gone(self) -> None:
+        err = errors.classify(
+            exit_code=1,
+            code="not_found",
+            message="session not registered or already stopped",
+            hint="the session may have stopped",
+            reason="",
+        )
+        self.assertIsInstance(err, errors.BskSessionGone)
+
     def test_format_diagnostic(self) -> None:
         err = errors.classify(
             exit_code=1,

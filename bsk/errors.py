@@ -252,6 +252,10 @@ class BskBrowserAmbiguous(BskError):
         return False
 
 
+class BskUserError(BskError):
+    """用户可纠正的操作错误（如参数错误、目标元素失效等）。"""
+
+
 # --- 判定辅助 ---
 
 
@@ -313,8 +317,17 @@ def classify(
             effect_state=effect_state,
         )
 
-    # 优先级 2：会话不存在 —— 可自动重建。
+    # 优先级 2：会话不存在或目标元素不存在
     if code == CODE_NOT_FOUND:
+        if reason in ("ref_not_found", "selector_not_found"):
+            return BskUserError(
+                detail,
+                friendly="目标元素不存在或已失效（页面可能已刷新或发生跳转）。请重新查看页面并使用最新元素编号。",
+                code=code,
+                exit_code=exit_code,
+                reason=reason,
+                effect_state=effect_state,
+            )
         return BskSessionGone(
             detail,
             friendly="浏览器会话已失效（可能空闲太久被回收），正在重新建立。",
