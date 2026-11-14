@@ -335,6 +335,8 @@ def classify(
             friendly = "当前页面处于空白页或受限协议页面（如 about:blank），无法读取或操作元素。"
         elif reason == "agent_window_scope":
             friendly = "浏览器拒绝了这次操作：该动作只允许在 bsk 自己的窗口里执行（若需操作其它标签页，请先使用 bsk_tabs(action='borrow') 借用）。"
+        elif reason == "cooperation_sync_required":
+            friendly = "当前页面控制权未同步或已失效，请先调用 bsk_session(action='sync') 同步页面控制权后再操作。"
         elif reason == "control_authority_required":
             friendly = "当前页面需要用户控制权或外部确认，暂时无法直接操作。"
         else:

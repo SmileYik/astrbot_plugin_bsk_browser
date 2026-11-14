@@ -228,6 +228,17 @@ class TestPermissionDeniedReasons(unittest.TestCase):
         self.assertIn("只允许在 bsk 自己的窗口里执行", err.friendly)
         self.assertEqual(err.reason, "agent_window_scope")
 
+    def test_cooperation_sync_required_friendly(self) -> None:
+        err = errors.classify(
+            exit_code=1,
+            code="permission_denied",
+            message="This action requires the context returned by the latest cooperate sync",
+            reason="cooperation_sync_required",
+        )
+        self.assertIn("页面控制权未同步或已失效", err.friendly)
+        self.assertIn("bsk_session(action='sync')", err.friendly)
+        self.assertEqual(err.reason, "cooperation_sync_required")
+
     def test_format_diagnostic(self) -> None:
         err = errors.classify(
             exit_code=1,
