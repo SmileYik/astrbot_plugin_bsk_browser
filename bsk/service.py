@@ -2609,9 +2609,10 @@ class BskService:
         argv, readonly = self._build_interact_args(action, opts)
         target = str(opts.get("target") or "").strip()
         auto_scrolled = False
+        auto_synced = False
 
-        try:
-            result = await self.sessions.execute(
+        async def _run_action() -> Any:
+            return await self.sessions.execute(
                 session_key,
                 lambda sid: self._with_tab_id(argv, tab_id)
                 + ["--session", sid, "--json"],
@@ -2620,22 +2621,46 @@ class BskService:
                 # —— 那可能造成重复点击、重复提交。
                 allow_uncertain=readonly,
             )
+
+        async def _run_scroll() -> Any:
+            scroll_argv, scroll_readonly = self._build_interact_args("scroll-to", {"target": target})
+            return await self.sessions.execute(
+                session_key,
+                lambda sid: self._with_tab_id(scroll_argv, tab_id) + ["--session", sid, "--json"],
+                timeout=self._timeout(self._interact_timeout_builtin("scroll-to")),
+                allow_uncertain=scroll_readonly,
+            )
+
+        try:
+            result = await _run_action()
         except BskError as exc:
-            if getattr(exc, "reason", "") == "element_not_visible" and target and action != "scroll-to":
+            if getattr(exc, "reason", "") == "cooperation_sync_required" and getattr(exc, "effect_state", "") != "unknown":
+                self._logger.info("检测到页面控制上下文未同步 (cooperation_sync_required)，尝试自动 sync_session 补救后重试 %s", action)
+                await self.sync_session(session_key, tab_id=tab_id)
+                auto_synced = True
+                try:
+                    result = await _run_action()
+                except BskError as retry_exc:
+                    if getattr(retry_exc, "reason", "") == "element_not_visible" and target and action != "scroll-to":
+                        self._logger.info("目标 %s 不在视口内，尝试自动 scroll-to 后重试 %s", target, action)
+                        await _run_scroll()
+                        result = await _run_action()
+                        auto_scrolled = True
+                    else:
+                        raise
+            elif getattr(exc, "reason", "") == "element_not_visible" and target and action != "scroll-to":
                 self._logger.info("目标 %s 不在视口内，尝试自动 scroll-to 后重试 %s", target, action)
-                scroll_argv, scroll_readonly = self._build_interact_args("scroll-to", {"target": target})
-                await self.sessions.execute(
-                    session_key,
-                    lambda sid: self._with_tab_id(scroll_argv, tab_id) + ["--session", sid, "--json"],
-                    timeout=self._timeout(self._interact_timeout_builtin("scroll-to")),
-                    allow_uncertain=scroll_readonly,
-                )
-                result = await self.sessions.execute(
-                    session_key,
-                    lambda sid: self._with_tab_id(argv, tab_id) + ["--session", sid, "--json"],
-                    timeout=self._timeout(self._interact_timeout_builtin(action)),
-                    allow_uncertain=readonly,
-                )
+                try:
+                    await _run_scroll()
+                except BskError as scroll_exc:
+                    if getattr(scroll_exc, "reason", "") == "cooperation_sync_required" and getattr(scroll_exc, "effect_state", "") != "unknown":
+                        self._logger.info("scroll-to 遇到 cooperation_sync_required，尝试自动 sync_session 补救后重试")
+                        await self.sync_session(session_key, tab_id=tab_id)
+                        auto_synced = True
+                        await _run_scroll()
+                    else:
+                        raise
+                result = await _run_action()
                 auto_scrolled = True
             else:
                 raise
@@ -2645,6 +2670,7 @@ class BskService:
             "action": action,
             "tab_id": self._payload_tab_id(result.data),
             "auto_scrolled": auto_scrolled,
+            "auto_synced": auto_synced,
         }
         out.update(self._interact_result(action, opts, result.data, readonly))
         return out

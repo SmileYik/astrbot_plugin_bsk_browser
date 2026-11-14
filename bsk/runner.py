@@ -424,6 +424,11 @@ class BskRunner:
             return result
 
         code, message, hint, reason = _extract_error_fields(result.data)
+        effect_state = ""
+        if isinstance(result.data, dict):
+            extra = result.data.get("data")
+            if isinstance(extra, dict):
+                effect_state = str(extra.get("effect_state") or "")
         raise errors.classify(
             exit_code=result.exit_code,
             code=code,
@@ -431,6 +436,7 @@ class BskRunner:
             hint=hint,
             reason=reason,
             stderr=result.stderr,
+            effect_state=effect_state,
         )
 
     @staticmethod

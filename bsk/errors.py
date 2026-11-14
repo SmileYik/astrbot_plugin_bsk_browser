@@ -101,6 +101,7 @@ class BskError(Exception):
         code: str = "",
         exit_code: int = -1,
         reason: str = "",
+        effect_state: str = "",
     ) -> None:
         super().__init__(message)
         self.message = message
@@ -109,6 +110,7 @@ class BskError(Exception):
         self.code = code
         self.exit_code = exit_code
         self.reason = reason
+        self.effect_state = effect_state
 
     def format_diagnostic(self, max_detail_len: int = 120) -> str:
         """格式化底层诊断信息供回显。"""
@@ -274,6 +276,7 @@ def classify(
     hint: str = "",
     reason: str = "",
     stderr: str = "",
+    effect_state: str = "",
 ) -> BskError:
     """把一次失败的 bsk 调用归类成具体的异常。
 
@@ -286,6 +289,7 @@ def classify(
         hint: 错误 JSON 里的 ``hint``。
         reason: 错误 JSON 里 ``data.reason``，用于判定"结果未知"。
         stderr: 进程 stderr 原文，clap 参数错误时只有它可用。
+        effect_state: 错误 JSON 里 ``data.effect_state``，"unknown" 表示可能有未知副作用。
 
     Returns:
         对应的 BskError 子类实例。
@@ -295,7 +299,7 @@ def classify(
         detail = f"{detail}（提示：{hint}）"
 
     # 优先级 1：动作结果未知 —— 必须最先判断，否则会被当成可重试错误。
-    if reason in OUTCOME_UNKNOWN_REASONS:
+    if reason in OUTCOME_UNKNOWN_REASONS or effect_state == "unknown":
         return BskOutcomeUnknown(
             detail,
             friendly=(
@@ -306,6 +310,7 @@ def classify(
             code=code,
             exit_code=exit_code,
             reason=reason,
+            effect_state=effect_state,
         )
 
     # 优先级 2：会话不存在 —— 可自动重建。
@@ -316,6 +321,7 @@ def classify(
             code=code,
             exit_code=exit_code,
             reason=reason,
+            effect_state=effect_state,
         )
 
     # 优先级 3：会话忙 —— 短暂等待后可重试一次。
@@ -326,6 +332,7 @@ def classify(
             code=code,
             exit_code=exit_code,
             reason=reason,
+            effect_state=effect_state,
         )
 
     if code == CODE_PERMISSION_DENIED:
@@ -348,6 +355,7 @@ def classify(
             code=code,
             exit_code=exit_code,
             reason=reason,
+            effect_state=effect_state,
         )
 
     # 优先级 4：按退出码兜底。
@@ -358,6 +366,7 @@ def classify(
             code=code,
             exit_code=exit_code,
             reason=reason,
+            effect_state=effect_state,
         )
 
     if exit_code == EXIT_BROWSER:
@@ -370,6 +379,7 @@ def classify(
             code=code,
             exit_code=exit_code,
             reason=reason,
+            effect_state=effect_state,
         )
 
     if exit_code == EXIT_VERSION:
@@ -379,6 +389,7 @@ def classify(
             code=code,
             exit_code=exit_code,
             reason=reason,
+            effect_state=effect_state,
         )
 
     if exit_code == EXIT_PROTOCOL:
@@ -388,6 +399,7 @@ def classify(
             code=code,
             exit_code=exit_code,
             reason=reason,
+            effect_state=effect_state,
         )
 
     # 默认：用户错误（参数写错、实体不存在等）。
@@ -405,4 +417,5 @@ def classify(
         code=code,
         exit_code=exit_code,
         reason=reason,
+        effect_state=effect_state,
     )
