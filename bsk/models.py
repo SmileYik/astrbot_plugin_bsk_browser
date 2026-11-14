@@ -217,11 +217,14 @@ class PageObservation:
 
     @classmethod
     def from_json(cls, raw: Any) -> PageObservation:
-        """从 ``observe --json`` 的输出构造（``text`` 的解析在 pages.py 里做）。"""
+        """从 ``observe --json`` 或 ``sync --json`` 的输出构造（``text`` 的解析在 pages.py 里做）。"""
         if not isinstance(raw, dict):
             return cls()
+        text = _as_str(raw.get("text") or raw.get("vom"))
+        if not text and isinstance(raw.get("observation"), dict):
+            text = _as_str(raw["observation"].get("text"))
         return cls(
-            text=_as_str(raw.get("text")),
+            text=text,
             ref_count=_as_int(raw.get("ref_count")),
             tab_id=_as_int(raw.get("tab_id")),
             truncated=_as_bool(raw.get("truncated")),

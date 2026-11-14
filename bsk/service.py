@@ -101,6 +101,9 @@ Note:
 TIMEOUT_NAVIGATE = 45.0
 """navigate 的下限。必须 大于 bsk 自身默认的 30s。"""
 
+TIMEOUT_SYNC = 45.0
+"""sync 的下限。必须 大于 bsk 自身默认的 30s。"""
+
 TIMEOUT_SCREENSHOT = 30.0
 """视口截图的下限。"""
 
@@ -1798,6 +1801,94 @@ class BskService:
                 "或在本次调用里显式给出要操作的 session。"
             ),
             code="no_current_session",
+        )
+
+    async def sync_session(
+        self,
+        key: str,
+        *,
+        tab_id: int | None = None,
+        wait_for: str = "",
+        wait_not: str = "",
+        timeout_ms: int | None = None,
+    ) -> PageObservation:
+        """同步页面状态并获取控制上下文（cooperation sync）。
+
+        执行 ``bsk sync``，注册 control context，并返回当前页面的语义结构（VOM）。
+        """
+        session_key = self._resolve_key(key)
+        stats_fn = getattr(self.sessions, "stats", None)
+        counters_before = stats_fn().get("counters", {}) if callable(stats_fn) else {}
+        rebuilds_before = counters_before.get("not_found_rebuilds", 0) if isinstance(counters_before, dict) else 0
+
+        args: list[str] = ["sync"]
+        if wait_for:
+            args += ["--wait-for", str(wait_for)]
+        if wait_not:
+            args += ["--wait-not", str(wait_not)]
+        if timeout_ms is not None:
+            args += ["--timeout-ms", str(int(timeout_ms))]
+
+        timeout = (
+            self._wait_timeout(int(timeout_ms))
+            if timeout_ms is not None and hasattr(self, "_wait_timeout")
+            else self._timeout(TIMEOUT_SYNC)
+        )
+        result = await self.sessions.execute(
+            session_key,
+            lambda sid: self._with_tab_id(args, tab_id) + ["--session", sid, "--json"],
+            timeout=timeout,
+            allow_uncertain=True,
+        )
+        observation = parse_observation(
+            result.data if isinstance(result.data, dict) else {}
+        )
+
+        counters_after = stats_fn().get("counters", {}) if callable(stats_fn) else {}
+        rebuilds_after = counters_after.get("not_found_rebuilds", 0) if isinstance(counters_after, dict) else 0
+        if rebuilds_after > rebuilds_before:
+            observation.text = (
+                "（注意：浏览器会话刚刚因空闲过久被回收并自动重建，"
+                "当前是新开的空白页，之前打开的网页和填过的内容已经丢失。"
+                "如果用户之前在浏览某个页面，需要重新用 bsk_open 打开那个网址。）\n"
+                + observation.text
+            )
+            self._logger.info("会话 %s 在同步时被重建，已在返回内容里标注页面已重置", key)
+
+        return observation
+
+    async def open_session(
+        self,
+        key: str,
+        url: str,
+        *,
+        browser: str | None = None,
+        timeout_ms: int | None = None,
+    ) -> PageObservation:
+        """在会话中打开目标网页并建立控制上下文（bsk open）。
+
+        相当于 session start / navigate + sync 的合体操作。
+        """
+        session_key = self._resolve_key(key)
+        args: list[str] = ["open", url]
+        if browser:
+            args += ["--browser", str(browser)]
+        if timeout_ms is not None:
+            args += ["--timeout-ms", str(int(timeout_ms))]
+
+        timeout = (
+            self._wait_timeout(int(timeout_ms))
+            if timeout_ms is not None and hasattr(self, "_wait_timeout")
+            else self._timeout(TIMEOUT_NAVIGATE)
+        )
+        result = await self.sessions.execute(
+            session_key,
+            lambda sid: args + ["--session", sid, "--json"],
+            timeout=timeout,
+            allow_uncertain=False,
+        )
+        return parse_observation(
+            result.data if isinstance(result.data, dict) else {}
         )
 
     # ------------------------------------------------------------------
