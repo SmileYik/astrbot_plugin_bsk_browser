@@ -1030,6 +1030,25 @@ class BskBrowserPlugin(Star):
                 )
             return "这条会话此前已经不在运行了，没有需要停止的东西。"
 
+        if action == "sync":
+            obs = await self.service.sync_session(
+                key=key,
+                tab_id=args.get("tab_id"),
+                wait_for=args.get("wait_for", ""),
+                wait_not=args.get("wait_not", ""),
+                timeout_ms=args.get("timeout_ms"),
+            )
+            return self.service.render_page(obs)
+
+        if action == "open":
+            obs = await self.service.open_session(
+                key=key,
+                url=args.get("url", ""),
+                browser=args.get("browser"),
+                timeout_ms=args.get("timeout_ms"),
+            )
+            return self.service.render_page(obs)
+
         # list
         return self._render_sessions(self.service.list_sessions())
 
@@ -1578,6 +1597,8 @@ class BskBrowserPlugin(Star):
             lines.append(f"目标元素：{target}")
         if result.get("auto_scrolled"):
             lines.append("（注意：目标元素原先位于视口外，已自动将其滚动至视口中心并完成操作。）")
+        if result.get("auto_synced"):
+            lines.append("（提示：检测到页面控制上下文未同步，已在后台自动执行 sync 补救重试；注意：后续在页面跳转或导航后，请优先主动调用 bsk_session(action='sync') 同步页面。）")
         if result.get("changed"):
             lines.append(
                 "这个动作会改变页面，接下来请用 bsk_inspect(action=\"observe\") "
@@ -1587,7 +1608,7 @@ class BskBrowserPlugin(Star):
         extra = {
             name: value
             for name, value in result.items()
-            if name not in ("session", "action", "target", "changed", "tab_id", "auto_scrolled")
+            if name not in ("session", "action", "target", "changed", "tab_id", "auto_scrolled", "auto_synced")
             and value not in (None, "", [], {})
         }
         if extra:
@@ -1766,14 +1787,16 @@ class BskBrowserPlugin(Star):
 
     @filter.llm_tool("bsk_session")
     async def bsk_session(self, event: AstrMessageEvent, **kwargs):
-        """管理浏览器会话：启动、停止、列出。
+        """管理浏览器会话：启动、停止、列出、同步控制权、打开页面。
 
-        action 取 start / stop / list：
+        action 取 start / stop / list / sync / open：
         - start：启动一个新的浏览器会话（可用 url 直接打开网页）
         - stop：停止当前会话
-        - list：列出本插件创建的会话（谁都能用，便于自助排查）
+        - list：列出本插件创建的会话（便于自助排查）
+        - sync：同步页面状态并获取控制上下文（cooperation sync，在页面跳转、导航或提交后必须调用以建立控制权）
+        - open：在会话中打开目标网页并自动建立控制上下文（合体操作，推荐直接打开新页面时使用）
 
-        首次使用浏览器功能前必须先 start 一个会话；后续操作会自动复用它。
+        首次使用浏览器功能前必须先 start 一个会话或 open 一个网页；页面跳转后请优先调用 sync 同步控制权。
         """
         return await self._dispatch("bsk_session", event, kwargs)
 
@@ -1785,7 +1808,7 @@ class BskBrowserPlugin(Star):
         - navigate 打开网址；back / forward 走历史；reload 刷新（hard 绕缓存）
         - wait 只等页面自己加载完，**不做任何导航**（点了会跳转的链接之后用它）
 
-        页面变化后元素编号会失效，请重新 observe 再操作。
+        页面变化后元素编号会失效；注意：导航或页面跳转后，请优先调用 bsk_session(action='sync') 同步页面并建立控制权后再进行交互操作。
         """
         return await self._dispatch("bsk_page", event, kwargs)
 
@@ -1842,6 +1865,7 @@ class BskBrowserPlugin(Star):
         select / press。target 支持快照引用（如 @e3）或 CSS 选择器；
         fill 还要 value，select 还要 values，press 必填 key。
         scroll-to 带连字符（不是 scroll_to）。
+        注意：交互操作依赖控制权上下文。若此前进行了页面导航或页面跳转，请先调用 bsk_session(action='sync') 同步页面控制权。
         操作后请 observe 一次确认结果。
         """
         return await self._dispatch("bsk_interact", event, kwargs)
