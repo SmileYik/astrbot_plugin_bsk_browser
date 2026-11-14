@@ -1170,8 +1170,8 @@ class BskBrowserPlugin(Star):
         if session:
             lines.append(f"会话：{session}")
         lines.append(
-            "页面内容可能已经变化，元素编号也会变；"
-            "接着请用 bsk_inspect(action=\"observe\") 重新读一次页面。"
+            "页面内容与元素编号已更新；"
+            "接着请用 bsk_session(action=\"sync\") 同步页面并获取最新元素编号。"
         )
         return "\n".join(lines)
 

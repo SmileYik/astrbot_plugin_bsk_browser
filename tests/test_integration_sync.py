@@ -143,8 +143,10 @@ class TestIntegrationSyncSuite(unittest.IsolatedAsyncioTestCase):
         cmds = [c[0] for c in self.runner.calls]
         self.assertEqual(cmds, ["session", "open", "fill"])
 
-    async def test_scenario_2_navigate_observe_interact_with_auto_sync_recovery(self) -> None:
-        """场景 2：模型采用 navigate -> observe -> interact 流程，触发 cooperation_sync_required 后自愈重试。"""
+    async def test_scenario_2_navigate_observe_interact_workflow(self) -> None:
+        """场景 2：模型采用 navigate -> observe -> interact 流程。
+        由于 observe 底层透明同步，interact 一次成功，无需补救重试。
+        """
         await self.service.start_session(key="test:user:sync")
         self.runner.calls.clear()
 
@@ -161,26 +163,7 @@ class TestIntegrationSyncSuite(unittest.IsolatedAsyncioTestCase):
                 },
             )
 
-        fill_count = 0
-
         async def handle_fill(args: list[str]) -> BskResult:
-            nonlocal fill_count
-            fill_count += 1
-            if fill_count == 1:
-                return BskResult(
-                    ok=False,
-                    exit_code=5,
-                    data={
-                        "code": "permission_denied",
-                        "data": {
-                            "action": "fill",
-                            "effect_state": "none",
-                            "reason": "cooperation_sync_required",
-                        },
-                        "reason": "cooperation_sync_required",
-                        "message": "cooperation control context required",
-                    },
-                )
             return BskResult(
                 ok=True,
                 exit_code=0,
@@ -207,6 +190,7 @@ class TestIntegrationSyncSuite(unittest.IsolatedAsyncioTestCase):
             "bsk_page", self.event, {"action": "navigate", "url": "https://www.baidu.com"}
         )
         self.assertIn("已导航", nav_res)
+        self.assertIn('bsk_session(action="sync")', nav_res)
 
         # 2. bsk_inspect(observe)
         obs_res = await self.plugin._dispatch(
@@ -215,16 +199,62 @@ class TestIntegrationSyncSuite(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Baidu", obs_res)
         self.assertIn("@e1", obs_res)
 
-        # 3. bsk_interact(fill) -> 触发 auto_sync 补救并重试成功
+        # 3. bsk_interact(fill) -> 正常填入，无需 auto_sync 补救
         fill_res = await self.plugin._dispatch(
             "bsk_interact", self.event, {"action": "fill", "target": "@e1", "value": "gtnh"}
         )
         self.assertIn("已执行 fill。", fill_res)
-        self.assertIn("已在后台自动执行 sync 补救重试", fill_res)
-        self.assertIn("优先主动调用 bsk_session(action='sync')", fill_res)
+        self.assertNotIn("已在后台自动执行 sync 补救重试", fill_res)
 
         cmds = [c[0] for c in self.runner.calls]
-        self.assertEqual(cmds, ["navigate", "observe", "fill", "sync", "fill"])
+        self.assertEqual(cmds, ["navigate", "sync", "fill"])
+
+    async def test_scenario_2_b_cooperation_sync_on_ref_gives_guidance_without_restart(self) -> None:
+        """场景 2b：若交互遇到 cooperation_sync_required 且目标为 @ref 时，
+        自动执行 sync 后优雅返回失效提示与新 VOM 引导，绝不触发会话重建或空白页。
+        """
+        await self.service.start_session(key="test:user:sync")
+        self.runner.calls.clear()
+
+        async def handle_fill(args: list[str]) -> BskResult:
+            return BskResult(
+                ok=False,
+                exit_code=5,
+                data={
+                    "code": "permission_denied",
+                    "data": {
+                        "action": "fill",
+                        "effect_state": "none",
+                        "reason": "cooperation_sync_required",
+                    },
+                    "reason": "cooperation_sync_required",
+                    "message": "cooperation control context required",
+                },
+            )
+
+        async def handle_sync(args: list[str]) -> BskResult:
+            return BskResult(
+                ok=True,
+                exit_code=0,
+                data={
+                    "vom": "@vom 1\n@view 800x600\nRootWebArea \"Baidu New\"\n@e56 combobox \"kw\"\n@e57 button \"su\"",
+                    "tab_id": 1,
+                },
+            )
+
+        self.runner.handlers["fill"] = handle_fill
+        self.runner.handlers["sync"] = handle_sync
+
+        fill_res = await self.plugin._dispatch(
+            "bsk_interact", self.event, {"action": "fill", "target": "@e15", "value": "gtnh"}
+        )
+        self.assertIn("已在后台自动执行 sync 完成同步", fill_res)
+        self.assertIn("原元素编号「@e15」已失效", fill_res)
+        self.assertIn("@e56", fill_res)
+        # 会话绝未被标记为 gone，未触发 restart
+        cmds = [c[0] for c in self.runner.calls]
+        self.assertEqual(cmds, ["fill", "sync"])
+        self.assertNotIn("session start", cmds)
 
     async def test_scenario_3_explicit_session_sync(self) -> None:
         """场景 3：模型主动调用 bsk_session(action='sync') 同步页面控制权。"""
@@ -304,7 +334,7 @@ class TestIntegrationSyncSuite(unittest.IsolatedAsyncioTestCase):
             return BskResult(
                 ok=True,
                 exit_code=0,
-                data={"session": "sid-sync-01", "target": "@e99", "clicked": True},
+                data={"session": "sid-sync-01", "target": "button.far-below", "clicked": True},
             )
 
         async def handle_sync(args: list[str]) -> BskResult:
@@ -318,7 +348,7 @@ class TestIntegrationSyncSuite(unittest.IsolatedAsyncioTestCase):
             return BskResult(
                 ok=True,
                 exit_code=0,
-                data={"session": "sid-sync-01", "target": "@e99", "scrolled": True},
+                data={"session": "sid-sync-01", "target": "button.far-below", "scrolled": True},
             )
 
         self.runner.handlers["click"] = handle_click
@@ -326,7 +356,7 @@ class TestIntegrationSyncSuite(unittest.IsolatedAsyncioTestCase):
         self.runner.handlers["scroll-to"] = handle_scroll_to
 
         res = await self.plugin._dispatch(
-            "bsk_interact", self.event, {"action": "click", "target": "@e99"}
+            "bsk_interact", self.event, {"action": "click", "target": "button.far-below"}
         )
 
         self.assertIn("已执行 click。", res)
