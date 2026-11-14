@@ -162,6 +162,7 @@ class TestInteractionResilienceSuite(unittest.IsolatedAsyncioTestCase):
             )
 
         self.runner.handlers["observe"] = handle_observe
+        self.runner.handlers["sync"] = handle_observe
 
         res = await self.plugin._dispatch(
             "bsk_inspect", self.event, {"action": "observe", "session": session_id}

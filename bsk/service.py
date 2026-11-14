@@ -595,6 +595,8 @@ class BskService:
         max_depth: int | None = None,
         max_tokens: int | None = None,
         tab_id: int | None = None,
+        probe_hover: bool = False,
+        debug_surfaces: bool = False,
     ) -> PageObservation:
         """读取当前页面的语义结构（VOM）。
 
@@ -610,20 +612,48 @@ class BskService:
             max_depth: VOM 树的最大深度（``--max-depth``）。
             max_tokens: 渲染 token 的软上限（``--max-tokens``，约 4 字符/token）。
             tab_id: 目标标签页（``--tab-id``）。不传 = Agent Window 的活动标签。
+            probe_hover: 是否执行悬停探测以暴露折叠菜单等表面（仅 observe 支持）。
+            debug_surfaces: 是否输出探测表面诊断信息（仅 observe 支持）。
 
         Note:
-            这是只读操作，所以 ``allow_uncertain=True``：即使上一次操作结果未知，
-            看一眼页面也是安全的，而且正是用户判断"到底发生了什么"所需要的。
-
-        Note:
-            如果这条命令触发了会话重建（原会话被 bsk 空闲回收），
-            返回的页面会是空白页 —— 实测确认：重建后 ``RootWebArea``
-            没有标题、``text`` 只剩几十个字符、``ref_count=0``。
-
-            这一点必须让模型知道，否则它会把"空白页"当成"这个网页本来就
-            没内容"来回答用户。所以重建时往 ``text`` 前面插一句明确提示
-            （``text`` 是模型唯一会读到的字段）。
+            在普通标准读取时（无 cursor，无 max_depth，未开启 probe），
+            透明转发至 ``sync_session``，以激活控制上下文并在协同模式下绑定控制权；
+            若当前页面不可同步（例如初次创建的空白页遇到 ``frame_unobservable``），
+            则平滑降级调用底层的 ``_run_observe``。
         """
+        if not cursor and max_depth is None and not probe_hover and not debug_surfaces:
+            try:
+                return await self.sync_session(key, tab_id=tab_id, max_tokens=max_tokens)
+            except BskError as exc:
+                if getattr(exc, "reason", "") == "frame_unobservable":
+                    self._logger.info("sync 在当前页面遇到 frame_unobservable（通常为初始空白页），平滑降级为只读 observe")
+                else:
+                    raise
+
+        kwargs: dict[str, Any] = {
+            "cursor": cursor,
+            "max_depth": max_depth,
+            "max_tokens": max_tokens,
+            "tab_id": tab_id,
+        }
+        if probe_hover:
+            kwargs["probe_hover"] = probe_hover
+        if debug_surfaces:
+            kwargs["debug_surfaces"] = debug_surfaces
+        return await self._run_observe(key, **kwargs)
+
+    async def _run_observe(
+        self,
+        key: str,
+        *,
+        cursor: str = "",
+        max_depth: int | None = None,
+        max_tokens: int | None = None,
+        tab_id: int | None = None,
+        probe_hover: bool = False,
+        debug_surfaces: bool = False,
+    ) -> PageObservation:
+        """底层执行 bsk observe 命令。"""
         session_key = self._resolve_key(key)
         counters_before = self.sessions.stats().get("counters", {})
         rebuilds_before = counters_before.get("not_found_rebuilds", 0)
@@ -635,6 +665,10 @@ class BskService:
             args += ["--max-depth", str(int(max_depth))]
         if max_tokens is not None:
             args += ["--max-tokens", str(int(max_tokens))]
+        if probe_hover:
+            args.append("--probe-hover")
+        if debug_surfaces:
+            args.append("--debug-surfaces")
 
         result = await self.sessions.execute(
             session_key,
@@ -1811,6 +1845,7 @@ class BskService:
         wait_for: str = "",
         wait_not: str = "",
         timeout_ms: int | None = None,
+        max_tokens: int | None = None,
     ) -> PageObservation:
         """同步页面状态并获取控制上下文（cooperation sync）。
 
@@ -1828,6 +1863,8 @@ class BskService:
             args += ["--wait-not", str(wait_not)]
         if timeout_ms is not None:
             args += ["--timeout-ms", str(int(timeout_ms))]
+        if max_tokens is not None:
+            args += ["--max-tokens", str(int(max_tokens))]
 
         timeout = (
             self._wait_timeout(int(timeout_ms))

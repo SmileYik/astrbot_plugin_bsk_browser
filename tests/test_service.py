@@ -59,6 +59,7 @@ from bsk.service import (  # noqa: E402
     TIMEOUT_OBSERVE,
     TIMEOUT_QUICK,
     TIMEOUT_SCREENSHOT,
+    TIMEOUT_SYNC,
     BskService,
 )
 
@@ -138,8 +139,9 @@ class FakeRunner:
 
         if command == "session start":
             data: Any = {"session_id": "mnaa", "browser_instance_id": "c900a3da"}
-        elif command == "observe":
+        elif command in ("observe", "sync"):
             data = {
+                "vom": '@vom 1\nL1 page\n  RootWebArea "Example Domain"',
                 "text": '@vom 1\nL1 page\n  RootWebArea "Example Domain"',
                 "ref_count": 0,
                 "tab_id": 1,
@@ -366,7 +368,7 @@ class TestObserveTimeout(ServiceIntegrationCase):
         """用户设 100 → observe 实际传下去的是 100，不是硬编码的 15。"""
         service, runner = self.make(command_timeout_sec=100.0)
 
-        await service.observe("umo-1")
+        await service._run_observe("umo-1")
 
         self.assertEqual(runner.timeout_for("observe"), 100.0)
         self.assertNotEqual(runner.timeout_for("observe"), TIMEOUT_OBSERVE)
@@ -376,7 +378,7 @@ class TestObserveTimeout(ServiceIntegrationCase):
         """用户设 5 → observe 仍是 15（下限保护）。"""
         service, runner = self.make(command_timeout_sec=5.0)
 
-        await service.observe("umo-1")
+        await service._run_observe("umo-1")
 
         self.assertEqual(runner.timeout_for("observe"), TIMEOUT_OBSERVE)
 
@@ -385,7 +387,7 @@ class TestObserveTimeout(ServiceIntegrationCase):
         for user_value, expected in ((5.0, 15.0), (20.0, 20.0), (110.0, 110.0)):
             with self.subTest(user=user_value):
                 service, runner = self.make(command_timeout_sec=user_value)
-                await service.observe(f"umo-{user_value}")
+                await service._run_observe(f"umo-{user_value}")
                 self.assertEqual(runner.timeout_for("observe"), expected)
 
 
@@ -399,7 +401,7 @@ class TestEveryCommandTimeout(ServiceIntegrationCase):
         await service.open_page("umo-1", "https://example.com")
 
         self.assertEqual(runner.timeout_for("navigate"), 100.0)
-        self.assertEqual(runner.timeout_for("observe"), 100.0)
+        self.assertEqual(runner.timeout_for("sync"), 100.0)
 
     async def test_navigate_floor_with_min_config(self) -> None:
         """用户设 5 时 navigate 仍是 45 —— 这条命令的下限保护最关键。"""
@@ -541,7 +543,7 @@ class TestTimeoutNeverZeroOrNone(ServiceIntegrationCase):
 
         expected = {
             "navigate": max(TIMEOUT_NAVIGATE, 110.0),
-            "observe": max(TIMEOUT_OBSERVE, 110.0),
+            "sync": max(TIMEOUT_SYNC, 110.0),
             "screenshot": max(TIMEOUT_FULLPAGE, 110.0),
         }
         for command, want in expected.items():
@@ -2165,7 +2167,7 @@ class TestFrameworkClampReachesSubprocess(ServiceIntegrationCase):
             command_timeout_sec=110.0, framework_limit=120.0
         )
 
-        await service.observe("umo-1")
+        await service._run_observe("umo-1")
 
         self.assertEqual(runner.timeout_for("observe"), 110.0)
 
@@ -2850,7 +2852,7 @@ class TestReadConsoleAndNetwork(ServiceIntegrationCase):
                 self._blew_up = False
 
             async def run_or_raise(self, args, *, timeout=None, expect_json=True):
-                if self._command_of(list(args)) == "observe" and not self._blew_up:
+                if self._command_of(list(args)) in ("observe", "sync") and not self._blew_up:
                     self._blew_up = True
                     raise BskOutcomeUnknown(
                         "结果未知",
@@ -2885,7 +2887,7 @@ class TestReadConsoleAndNetwork(ServiceIntegrationCase):
                 self._blew_up = False
 
             async def run_or_raise(self, args, *, timeout=None, expect_json=True):
-                if self._command_of(list(args)) == "observe" and not self._blew_up:
+                if self._command_of(list(args)) in ("observe", "sync") and not self._blew_up:
                     self._blew_up = True
                     raise BskOutcomeUnknown(
                         "结果未知", reason="extension_reconnected", exit_code=3

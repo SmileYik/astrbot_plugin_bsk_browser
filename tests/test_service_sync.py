@@ -170,6 +170,41 @@ class TestServiceSync(unittest.IsolatedAsyncioTestCase):
         service.sync_session.assert_called_once_with("s1", tab_id=None)
         self.assertEqual(service.sessions.execute.call_count, 4)
 
+    async def test_observe_transparently_calls_sync_session(self) -> None:
+        service = BskService.__new__(BskService)
+        service.sync_session = AsyncMock(
+            return_value=PageObservation(text="@vom 1\nRootWebArea \"Test\"\n@e1 link \"A\"", ref_count=1)
+        )
+        service._run_observe = AsyncMock()
+
+        obs = await service.observe("s1", tab_id=2, max_tokens=1000)
+        self.assertEqual(obs.ref_count, 1)
+        service.sync_session.assert_called_once_with("s1", tab_id=2, max_tokens=1000)
+        service._run_observe.assert_not_called()
+
+    async def test_observe_sync_session_fallback_on_frame_unobservable(self) -> None:
+        service = BskService.__new__(BskService)
+        service._logger = MagicMock()
+        from bsk.errors import BskError
+        service.sync_session = AsyncMock(side_effect=BskError("blank page", reason="frame_unobservable"))
+        service._run_observe = AsyncMock(
+            return_value=PageObservation(text="@vom 1\nRootWebArea \"about:blank\"", ref_count=0)
+        )
+
+        obs = await service.observe("s1")
+        self.assertEqual(obs.ref_count, 0)
+        service.sync_session.assert_called_once_with("s1", tab_id=None, max_tokens=None)
+        service._run_observe.assert_called_once_with("s1", cursor="", max_depth=None, max_tokens=None, tab_id=None)
+
+    async def test_observe_with_max_depth_or_cursor_bypasses_sync(self) -> None:
+        service = BskService.__new__(BskService)
+        service.sync_session = AsyncMock()
+        service._run_observe = AsyncMock(return_value=PageObservation(text="vom", ref_count=1))
+
+        await service.observe("s1", max_depth=3)
+        service.sync_session.assert_not_called()
+        service._run_observe.assert_called_once_with("s1", cursor="", max_depth=3, max_tokens=None, tab_id=None)
+
 
 
 
