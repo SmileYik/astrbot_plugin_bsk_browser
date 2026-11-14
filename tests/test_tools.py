@@ -75,7 +75,7 @@ DEBUG_ONLY_PARAMS = (
 # ``bsk_debug`` 的 24 个 action 在这里**逐字写开**，不从
 # ``tools.DEBUG_ACTIONS`` 取：那样等于用实现验证实现，改名/漏项都测不出来。
 EXPECTED_ACTIONS = {
-    "bsk_session": ("start", "stop", "list"),
+    "bsk_session": ("start", "stop", "list", "sync", "open"),
     "bsk_page": ("navigate", "back", "forward", "reload", "wait"),
     "bsk_inspect": (
         "observe",
@@ -498,6 +498,17 @@ class TestRequiredArguments(unittest.TestCase):
         with self.assertRaises(tools.BskToolError):
             call("bsk_assist", {"action": "request-help"})
         call("bsk_assist", {"action": "request-help", "prompt": "请登录"})
+
+    def test_session_sync_validation_success(self) -> None:
+        res = call("bsk_session", {"action": "sync"})
+        self.assertEqual(res["action"], "sync")
+
+    def test_session_open_requires_url(self) -> None:
+        with self.assertRaises(tools.BskToolError):
+            call("bsk_session", {"action": "open"})
+        res = call("bsk_session", {"action": "open", "url": "https://example.com"})
+        self.assertEqual(res["action"], "open")
+        self.assertEqual(res["url"], "https://example.com")
 
 
 class TestMutualExclusion(unittest.TestCase):

@@ -117,7 +117,7 @@ LOAD_TOOL_GROUPS: tuple[str, ...] = ("debug",)
 """
 
 TOOL_ACTIONS: dict[str, tuple[str, ...]] = {
-    "bsk_session": ("start", "stop", "list"),
+    "bsk_session": ("start", "stop", "list", "sync", "open"),
     "bsk_page": ("navigate", "back", "forward", "reload", "wait"),
     "bsk_inspect": (
         "observe",
@@ -553,7 +553,7 @@ TOOL_SCHEMAS: dict[str, dict] = {
     "bsk_session": _schema(
         "bsk_session",
         {
-            "url": _p("string", "start：启动后直接打开的网址；给了就不能是空串。"),
+            "url": _p("string", "open/start：要打开的网址；open 必填，start 可选。给了就不能是空串。"),
             "width": _p("number", "start：Agent Window 宽度（CSS 像素），必须与 height 同时给。"),
             "height": _p("number", "start：Agent Window 高度（CSS 像素），必须与 width 同时给。"),
             "no_focus": _p(
@@ -563,14 +563,18 @@ TOOL_SCHEMAS: dict[str, dict] = {
             ),
             "browser": _p(
                 "string",
-                "start：要连接的浏览器实例 ID 或唯一的名称。已知要连哪个浏览器时，"
+                "start/open：要连接的浏览器实例 ID 或唯一的名称。已知要连哪个浏览器时，"
                 "即使只连了一个也必须显式指定；不确定就先问用户，不要省略或换一个。",
             ),
             "device": _DEVICE_PROP,
             "session": _p(
                 "string",
-                "stop：要停止的自有会话 ID。不传时对 current 会话动手。",
+                "stop/sync/open：要操作的自有会话 ID。不传时对 current 会话动手。",
             ),
+            "tab_id": _TAB_ID_PROP,
+            "timeout_ms": _TIMEOUT_MS_PROP,
+            "wait_for": _p("string", "sync：等待直到页面 VOM 包含该字符串。"),
+            "wait_not": _p("string", "sync：等待直到页面 VOM 不再包含该字符串。"),
         },
     ),
     "bsk_page": _schema(
@@ -749,10 +753,10 @@ properties 是该工具**全部 action 参数的并集**。
 
 TOOL_DESCRIPTIONS: dict[str, str] = {
     "bsk_session": (
-        "管理本插件自己的浏览器会话。action 取 start / stop / list："
-        "start 打开一个 Agent Window（url、device、width+height、no_focus 可选）；"
-        "stop 关闭自有会话；list 列出本插件创建的会话。"
-        "要用浏览器前必须先 start；之后的工具会复用 current 会话。"
+        "管理本插件自己的浏览器会话。action 取 start / open / sync / stop / list："
+        "open 一步完成启动会话、打开网页并同步页面控制权（推荐）；"
+        "sync 同步当前页面的语义元素结构并建立交互控制上下文（页面跳转后必调）；"
+        "start 打开一个 Agent Window；stop 关闭自有会话；list 列出本插件创建的会话。"
     ),
     "bsk_page": (
         "在 Agent Window 的当前标签页上导航与等待。action 取 navigate / back / forward / "
@@ -1189,10 +1193,10 @@ def _validate_session(ctx: _Ctx) -> dict:
         return out
 
     if action == "stop":
-        for key in ("url", "device", "width", "height", "no_focus", "browser"):
+        for key in ("url", "device", "width", "height", "no_focus", "browser", "wait_for", "wait_not", "timeout_ms"):
             if ctx.given(key):
                 ctx.fail(
-                    f"{ctx.where()} 不接受参数 {key}：它只对 start 有意义。"
+                    f"{ctx.where()} 不接受参数 {key}：它只对 start/open/sync 有意义。"
                     "要停止会话只需要 session。"
                 )
         if ctx.given("tab_id"):
@@ -1203,9 +1207,44 @@ def _validate_session(ctx: _Ctx) -> dict:
         ctx.check_known()
         return {"session": ctx.as_str("session")}
 
+    if action == "open":
+        ctx.require("url")
+        url = ctx.as_str("url")
+        _reject_blank(ctx, "url", "请给一个完整网址，例如 https://example.com。")
+        browser = ctx.as_str("browser")
+        session = ctx.as_str("session")
+        timeout_ms = ctx.as_int("timeout_ms", positive=True)
+        ctx.check_known()
+        out: dict[str, Any] = {"url": url}
+        if browser:
+            out["browser"] = browser
+        if session:
+            out["session"] = session
+        if timeout_ms is not None:
+            out["timeout_ms"] = timeout_ms
+        return out
+
+    if action == "sync":
+        tab_id = _check_tab_id(ctx)
+        timeout_ms = ctx.as_int("timeout_ms", positive=True)
+        wait_for = ctx.as_str("wait_for")
+        wait_not = ctx.as_str("wait_not")
+        session = ctx.as_str("session")
+        ctx.check_known()
+        out = {"session": session}
+        if tab_id is not None:
+            out["tab_id"] = tab_id
+        if timeout_ms is not None:
+            out["timeout_ms"] = timeout_ms
+        if wait_for:
+            out["wait_for"] = wait_for
+        if wait_not:
+            out["wait_not"] = wait_not
+        return out
+
     # list：不接受任何额外参数
     for key in ("session", "url", "device", "width", "height", "no_focus",
-                "browser", "tab_id"):
+                "browser", "tab_id", "wait_for", "wait_not", "timeout_ms"):
         if ctx.given(key):
             ctx.fail(
                 f"{ctx.where()} 不接受参数 {key}：list 只读插件自己的注册表，"
