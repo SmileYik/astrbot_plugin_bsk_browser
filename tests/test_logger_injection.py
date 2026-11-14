@@ -450,6 +450,15 @@ class TestServicePassesLoggerDownstream(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("mnaa", rec.rendered())
 
+    def test_logger_reaches_runner(self) -> None:
+        rec = RecordingLogger()
+        service = BskService(
+            make_settings(log_max_output_length=512),
+            logger=rec,
+        )
+        self.assertIs(service.runner._logger, rec)
+        self.assertEqual(service.runner.max_log_len, 512)
+
     async def test_logger_reaches_journal(self) -> None:
         """journal 路径不可写 → 写失败的那条 debug 必须落到注入对象上。
 

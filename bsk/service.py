@@ -208,6 +208,8 @@ class BskService:
         self.runner = runner or BskRunner(
             settings.bsk_path,
             default_timeout=settings.command_timeout_sec,
+            logger=self._logger,
+            max_log_len=getattr(settings, "log_max_output_length", 2048),
         )
         # journal 是"尽力而为"的辅助机制：解析默认位置时会试着建一次数据目录
         # （判定"能不能用"的唯一可靠办法），但失败就降级到临时目录，

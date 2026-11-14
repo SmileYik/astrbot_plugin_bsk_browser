@@ -26,7 +26,27 @@ __all__ = [
     "NULL_LOGGER",
     "LoggerLike",
     "NullLogger",
+    "truncate_log_text",
 ]
+
+
+def truncate_log_text(text: Any, max_len: int) -> str:
+    """按字符上限截断日志文本。
+
+    Args:
+        text: 待截断的内容（非字符串安全转为 str，None 转为空串）。
+        max_len: 字符上限；<= 0 表示不截断。
+
+    Returns:
+        安全截断后的字符串，若截断则附带 '... [已截断，共 N 字符]' 后缀。
+    """
+    if text is None:
+        return ""
+    s = text if isinstance(text, str) else str(text)
+    if max_len <= 0 or len(s) <= max_len:
+        return s
+    return f"{s[:max_len]}... [已截断，共 {len(s)} 字符]"
+
 
 
 @runtime_checkable

@@ -27,6 +27,9 @@
 from __future__ import annotations
 
 import asyncio
+import functools
+import inspect
+import time
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +45,7 @@ from .bsk.config import (
     validate_settings,
 )
 from .bsk.errors import BskError
+from .bsk.logger import truncate_log_text
 from .bsk.models import ConsoleLog
 from .bsk.service import BskService
 from .bsk.tools import BskToolError
@@ -340,6 +344,134 @@ def _next_since(cursor: int, log: ConsoleLog) -> int:
 # （曾出现作者仍是占位符 "yourname"、版本停在 0.1.0、描述漏掉 4 个工具）。
 # 本插件声明 ``astrbot_version: ">=4.16"``，远高于该装饰器废弃的 v3.5.19，
 # 删除它不影响任何受支持的 AstrBot 版本。
+def _trace_tool_call(tool_name: str):
+    """用于追踪 LLM 工具调用的切面装饰器。
+
+    支持普通异步函数（async def）与异步生成器（async def 返回 AsyncGenerator，如 bsk_screenshot）。
+    在调用前记录触发时间、工具名、所属会话及参数；
+    在调用后（无论成功还是异常）记录耗时、状态及截断后的返回值。
+    """
+
+    def decorator(func):
+        if inspect.isasyncgenfunction(func):
+
+            @functools.wraps(func)
+            async def gen_wrapper(self, event: AstrMessageEvent, *args: Any, **kwargs: Any):
+                umo = getattr(event, "unified_msg_origin", "") or ""
+                try:
+                    sender = str(event.get_sender_id() or "")
+                except Exception:
+                    sender = ""
+                try:
+                    session_key = self._key(event)
+                except Exception:
+                    session_key = umo or "unknown"
+                started = time.monotonic()
+                combined_args = dict(kwargs)
+                if args:
+                    combined_args["_args"] = args
+                max_len = getattr(self.settings, "log_max_output_length", 2048)
+                args_trunc = truncate_log_text(combined_args, max_len)
+
+                astrbot_logger.debug(
+                    "[工具调用开始] 工具: %s | 会话: %s (umo=%s, sender=%s) | 参数: %s",
+                    tool_name,
+                    session_key,
+                    umo,
+                    sender,
+                    args_trunc,
+                )
+                outputs = []
+                exc_info: BaseException | None = None
+                try:
+                    async for item in func(self, event, *args, **kwargs):
+                        outputs.append(item)
+                        yield item
+                except BaseException as exc:
+                    exc_info = exc
+                    raise
+                finally:
+                    elapsed = time.monotonic() - started
+                    if exc_info is None:
+                        summary = " | ".join(str(o) for o in outputs)
+                        ret_trunc = truncate_log_text(summary, max_len)
+                        astrbot_logger.debug(
+                            "[工具调用结束] 工具: %s | 会话: %s | 耗时: %.3fs | 状态: 成功 | 返回: %s",
+                            tool_name,
+                            session_key,
+                            elapsed,
+                            ret_trunc,
+                        )
+                    else:
+                        astrbot_logger.debug(
+                            "[工具调用结束] 工具: %s | 会话: %s | 耗时: %.3fs | 状态: 异常 | 错误: %r",
+                            tool_name,
+                            session_key,
+                            elapsed,
+                            exc_info,
+                        )
+
+            return gen_wrapper
+
+        @functools.wraps(func)
+        async def async_wrapper(self, event: AstrMessageEvent, *args: Any, **kwargs: Any):
+            umo = getattr(event, "unified_msg_origin", "") or ""
+            try:
+                sender = str(event.get_sender_id() or "")
+            except Exception:
+                sender = ""
+            try:
+                session_key = self._key(event)
+            except Exception:
+                session_key = umo or "unknown"
+            started = time.monotonic()
+            combined_args = dict(kwargs)
+            if args:
+                combined_args["_args"] = args
+            max_len = getattr(self.settings, "log_max_output_length", 2048)
+            args_trunc = truncate_log_text(combined_args, max_len)
+
+            astrbot_logger.debug(
+                "[工具调用开始] 工具: %s | 会话: %s (umo=%s, sender=%s) | 参数: %s",
+                tool_name,
+                session_key,
+                umo,
+                sender,
+                args_trunc,
+            )
+            ret = None
+            exc_info: BaseException | None = None
+            try:
+                ret = await func(self, event, *args, **kwargs)
+                return ret
+            except BaseException as exc:
+                exc_info = exc
+                raise
+            finally:
+                elapsed = time.monotonic() - started
+                if exc_info is None:
+                    ret_trunc = truncate_log_text(ret, max_len)
+                    astrbot_logger.debug(
+                        "[工具调用结束] 工具: %s | 会话: %s | 耗时: %.3fs | 状态: 成功 | 返回: %s",
+                        tool_name,
+                        session_key,
+                        elapsed,
+                        ret_trunc,
+                    )
+                else:
+                    astrbot_logger.debug(
+                        "[工具调用结束] 工具: %s | 会话: %s | 耗时: %.3fs | 状态: 异常 | 错误: %r",
+                        tool_name,
+                        session_key,
+                        elapsed,
+                        exc_info,
+                    )
+
+        return async_wrapper
+
+    return decorator
+
+
 class BskBrowserPlugin(Star):
     """把本机 bsk CLI 包装成 LLM 可调用的浏览器操作能力。
 
@@ -1826,6 +1958,7 @@ class BskBrowserPlugin(Star):
     # ------------------------------------------------------------------
 
     @filter.llm_tool("bsk_session")
+    @_trace_tool_call("bsk_session")
     async def bsk_session(self, event: AstrMessageEvent, **kwargs):
         """管理浏览器会话：启动、停止、列出、同步控制权、打开页面。
 
@@ -1841,6 +1974,7 @@ class BskBrowserPlugin(Star):
         return await self._dispatch("bsk_session", event, kwargs)
 
     @filter.llm_tool("bsk_page")
+    @_trace_tool_call("bsk_page")
     async def bsk_page(self, event: AstrMessageEvent, **kwargs):
         """在浏览器里导航，并等待页面加载。
 
@@ -1853,6 +1987,7 @@ class BskBrowserPlugin(Star):
         return await self._dispatch("bsk_page", event, kwargs)
 
     @filter.llm_tool("bsk_inspect")
+    @_trace_tool_call("bsk_inspect")
     async def bsk_inspect(self, event: AstrMessageEvent, **kwargs):
         """读取页面状态：大纲/元素/正文、快照、HTML、截图、控制台与网络日志。
 
@@ -1866,6 +2001,7 @@ class BskBrowserPlugin(Star):
         return await self._dispatch("bsk_inspect", event, kwargs)
 
     @filter.llm_tool("bsk_debug")
+    @_trace_tool_call("bsk_debug")
     async def bsk_debug(self, event: AstrMessageEvent, **kwargs):
         """调试与网络流量控制：抓包、分析请求、导出证据、拦截或重放请求。
 
@@ -1879,6 +2015,7 @@ class BskBrowserPlugin(Star):
         return await self._dispatch("bsk_debug", event, kwargs)
 
     @filter.llm_tool("bsk_load_tools")
+    @_trace_tool_call("bsk_load_tools")
     async def bsk_load_tools(self, event: AstrMessageEvent, **kwargs):
         """按需加载能力。目前只有一组：debug（抓包与网络调试）。
 
@@ -1898,6 +2035,7 @@ class BskBrowserPlugin(Star):
         return await self._dispatch("bsk_load_tools", event, raw)
 
     @filter.llm_tool("bsk_interact")
+    @_trace_tool_call("bsk_interact")
     async def bsk_interact(self, event: AstrMessageEvent, **kwargs):
         """与页面交互：点击、输入、按键、滚动等。
 
@@ -1910,6 +2048,7 @@ class BskBrowserPlugin(Star):
         return await self._dispatch("bsk_interact", event, kwargs)
 
     @filter.llm_tool("bsk_tabs")
+    @_trace_tool_call("bsk_tabs")
     async def bsk_tabs(self, event: AstrMessageEvent, **kwargs):
         """管理浏览器标签页：列出、新建、切换、关闭、借用、归还。
 
@@ -1921,6 +2060,7 @@ class BskBrowserPlugin(Star):
         return await self._dispatch("bsk_tabs", event, kwargs)
 
     @filter.llm_tool("bsk_assist")
+    @_trace_tool_call("bsk_assist")
     async def bsk_assist(self, event: AstrMessageEvent, **kwargs):
         """调整窗口与设备模拟，或请真人帮忙完成页内步骤。
 
@@ -1937,6 +2077,7 @@ class BskBrowserPlugin(Star):
     # ------------------------------------------------------------------
 
     @filter.llm_tool("bsk_open")
+    @_trace_tool_call("bsk_open")
     async def bsk_open(self, event: AstrMessageEvent, url: str, new_session: bool = False):
         """用浏览器打开一个网页，并返回页面标题和可交互元素。
 
@@ -1985,6 +2126,7 @@ class BskBrowserPlugin(Star):
     # ------------------------------------------------------------------
 
     @filter.llm_tool("bsk_read")
+    @_trace_tool_call("bsk_read")
     async def bsk_read(self, event: AstrMessageEvent):
         """读取当前浏览器页面的内容和可交互元素编号。
 
@@ -2014,6 +2156,7 @@ class BskBrowserPlugin(Star):
     # ------------------------------------------------------------------
 
     @filter.llm_tool("bsk_act")
+    @_trace_tool_call("bsk_act")
     async def bsk_act(
         self,
         event: AstrMessageEvent,
@@ -2081,6 +2224,7 @@ class BskBrowserPlugin(Star):
     # ------------------------------------------------------------------
 
     @filter.llm_tool("bsk_screenshot")
+    @_trace_tool_call("bsk_screenshot")
     async def bsk_screenshot(self, event: AstrMessageEvent, full_page: bool = False):
         """给当前浏览器页面截图，并直接把图片发给用户。
 
@@ -2129,6 +2273,7 @@ class BskBrowserPlugin(Star):
     # ------------------------------------------------------------------
 
     @filter.llm_tool("bsk_close")
+    @_trace_tool_call("bsk_close")
     async def bsk_close(self, event: AstrMessageEvent):
         """关闭当前聊天正在使用的浏览器会话（会关掉那个 Agent Window）。
 
@@ -2157,6 +2302,7 @@ class BskBrowserPlugin(Star):
     # ------------------------------------------------------------------
 
     @filter.llm_tool("bsk_status")
+    @_trace_tool_call("bsk_status")
     async def bsk_status(self, event: AstrMessageEvent):
         """检查浏览器环境是否正常（bsk 是否安装、浏览器扩展是否连上、有多少会话）。
 
@@ -2256,6 +2402,7 @@ class BskBrowserPlugin(Star):
     # ------------------------------------------------------------------
 
     @filter.llm_tool("bsk_evaluate")
+    @_trace_tool_call("bsk_evaluate")
     async def bsk_evaluate(self, event: AstrMessageEvent, expression: str):
         """在当前页面里执行一段 JavaScript 表达式，并返回它的值。
 
@@ -2298,6 +2445,7 @@ class BskBrowserPlugin(Star):
     # ------------------------------------------------------------------
 
     @filter.llm_tool("bsk_logs")
+    @_trace_tool_call("bsk_logs")
     async def bsk_logs(
         self, event: AstrMessageEvent, kind: str = "console", since: float = 0
     ):

@@ -30,6 +30,7 @@ from typing import Any
 
 from . import errors
 from .errors import BskError, BskNotInstalled
+from .logger import NULL_LOGGER, LoggerLike, truncate_log_text
 from .models import BskResult
 
 # 超时后给 bsk 的优雅取消宽限期（秒）。
@@ -254,10 +255,14 @@ class BskRunner:
         bsk_path: str,
         default_timeout: float = 60.0,
         cancel_grace: float = DEFAULT_CANCEL_GRACE_SEC,
+        logger: LoggerLike | None = None,
+        max_log_len: int | None = 2048,
     ) -> None:
         self._configured_path = bsk_path
         self.default_timeout = max(1.0, float(default_timeout))
         self.cancel_grace = max(MIN_CANCEL_GRACE_SEC, float(cancel_grace))
+        self._logger = logger or NULL_LOGGER
+        self.max_log_len = 2048 if max_log_len is None else max(0, int(max_log_len))
         self._resolved: str | None = None
 
     def resolve(self) -> str:
@@ -294,11 +299,31 @@ class BskRunner:
             BskNotInstalled: 找不到 bsk。
             BskError: 进程启动失败等基础设施错误（非 bsk 业务错误）。
         """
-        exe = self.resolve()
         effective_timeout = float(timeout) if timeout else self.default_timeout
+        started = time.monotonic()
+        try:
+            exe = self.resolve()
+        except Exception as exc:
+            argv = [self._configured_path or "bsk", *args]
+            self._logger.debug(
+                "[bsk] 执行命令开始: %s (超时=%s秒)",
+                argv,
+                f"{effective_timeout:.1f}" if effective_timeout else "默认",
+            )
+            self._logger.debug(
+                "[bsk] 执行命令失败: %s | 耗时: %.3fs | 错误: %r",
+                argv,
+                time.monotonic() - started,
+                exc,
+            )
+            raise
 
         argv = [exe, *args]
-        started = time.monotonic()
+        self._logger.debug(
+            "[bsk] 执行命令开始: %s (超时=%s秒)",
+            argv,
+            f"{effective_timeout:.1f}" if effective_timeout else "默认",
+        )
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -310,6 +335,12 @@ class BskRunner:
                 env=_build_env(),
             )
         except OSError as exc:
+            self._logger.debug(
+                "[bsk] 执行命令失败: %s | 耗时: %.3fs | 错误: %r",
+                argv,
+                time.monotonic() - started,
+                exc,
+            )
             raise BskError(
                 f"启动 bsk 失败：{exc}",
                 friendly=(
@@ -326,26 +357,67 @@ class BskRunner:
 
         timed_out = False
         try:
-            await asyncio.wait_for(proc.wait(), timeout=effective_timeout)
-        except asyncio.TimeoutError:
-            timed_out = True
-            await self._cancel(proc, self.cancel_grace)
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=effective_timeout)
+            except asyncio.TimeoutError:
+                timed_out = True
+                await self._cancel(proc, self.cancel_grace)
 
-        # 进程已退出（或被我们终止）。给抽取任务一个有界的时间收尾：
-        # Windows 上 daemon 可能继承了管道句柄，导致 EOF 永远不来，
-        # 所以必须有上限，不能无限等。
-        with contextlib.suppress(asyncio.TimeoutError, Exception):
-            await asyncio.wait_for(
-                asyncio.gather(drain_out, drain_err, return_exceptions=True),
-                timeout=DRAIN_TIMEOUT_SEC,
+            # 进程已退出（或被我们终止）。给抽取任务一个有界的时间收尾：
+            # Windows 上 daemon 可能继承了管道句柄，导致 EOF 永远不来，
+            # 所以必须有上限，不能无限等。
+            with contextlib.suppress(asyncio.TimeoutError, Exception):
+                await asyncio.wait_for(
+                    asyncio.gather(drain_out, drain_err, return_exceptions=True),
+                    timeout=DRAIN_TIMEOUT_SEC,
+                )
+        except BaseException as exc:
+            with contextlib.suppress(BaseException):
+                await asyncio.shield(self._cancel(proc, self.cancel_grace))
+            with contextlib.suppress(BaseException):
+                await asyncio.shield(
+                    asyncio.wait_for(
+                        asyncio.gather(drain_out, drain_err, return_exceptions=True),
+                        timeout=DRAIN_TIMEOUT_SEC,
+                    )
+                )
+            for task in (drain_out, drain_err):
+                if not task.done():
+                    task.cancel()
+            elapsed = time.monotonic() - started
+            code = proc.returncode if proc.returncode is not None else -1
+            stdout_text = b"".join(stdout_chunks).decode("utf-8", errors="replace").strip()
+            out_trunc = truncate_log_text(stdout_text, self.max_log_len)
+            err_msg = "cancelled" if isinstance(exc, asyncio.CancelledError) else f"cancelled / {exc!r}"
+            err_trunc = truncate_log_text(err_msg, self.max_log_len)
+            self._logger.debug(
+                "[bsk] 执行命令完成: %s | 退出码: %s | 耗时: %.3fs | stdout: %s | stderr: %s",
+                argv,
+                code,
+                elapsed,
+                out_trunc,
+                err_trunc,
             )
-        for task in (drain_out, drain_err):
-            if not task.done():
-                task.cancel()
+            raise
+        finally:
+            for task in (drain_out, drain_err):
+                if not task.done():
+                    task.cancel()
 
         elapsed = time.monotonic() - started
 
         if timed_out:
+            out_trunc = truncate_log_text("", self.max_log_len)
+            err_msg = f"timeout after {effective_timeout:.0f}s"
+            err_trunc = truncate_log_text(err_msg, self.max_log_len)
+            self._logger.debug(
+                "[bsk] 执行命令完成: %s | 退出码: %s | 耗时: %.3fs | stdout: %s | stderr: %s",
+                argv,
+                errors.EXIT_TIMEOUT,
+                elapsed,
+                out_trunc,
+                err_trunc,
+            )
             return BskResult(
                 ok=False,
                 exit_code=errors.EXIT_TIMEOUT,
@@ -354,7 +426,7 @@ class BskRunner:
                     "message": f"命令超过 {effective_timeout:.0f} 秒未返回",
                     "exit_code": errors.EXIT_TIMEOUT,
                 },
-                stderr=f"timeout after {effective_timeout:.0f}s",
+                stderr=err_msg,
                 elapsed=elapsed,
             )
 
@@ -363,6 +435,17 @@ class BskRunner:
         stdout = b"".join(stdout_chunks).decode("utf-8", errors="replace").strip()
         stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace").strip()
         code = proc.returncode if proc.returncode is not None else -1
+
+        out_trunc = truncate_log_text(stdout, self.max_log_len)
+        err_trunc = truncate_log_text(stderr, self.max_log_len)
+        self._logger.debug(
+            "[bsk] 执行命令完成: %s | 退出码: %s | 耗时: %.3fs | stdout: %s | stderr: %s",
+            argv,
+            code,
+            elapsed,
+            out_trunc,
+            err_trunc,
+        )
 
         parsed = _try_parse_json(stdout)
 

@@ -47,6 +47,7 @@ __all__ = [
     "DEFAULT_LAZY_DEBUG_TOOL",
     "DEFAULT_LEGACY_FRINGE_TOOLS",
     "DEFAULT_LEGACY_TOOLS",
+    "DEFAULT_LOG_MAX_OUTPUT_LENGTH",
     "DEFAULT_MAX_PAGE_CHARS",
     "DEFAULT_MAX_SESSIONS",
     "DEFAULT_SCREENSHOT_DIR",
@@ -58,6 +59,7 @@ __all__ = [
     "FULLPAGE_TIMEOUT_MIN_SEC",
     "IDLE_RELEASE_MAX_SEC",
     "IDLE_RELEASE_MIN_SEC",
+    "LOG_MAX_OUTPUT_LENGTH_MAX",
     "MAX_PAGE_CHARS_MAX",
     "MAX_PAGE_CHARS_MIN",
     "MAX_SESSIONS_MAX",
@@ -220,6 +222,12 @@ journal 记录"本插件创建了哪些浏览器会话"。AstrBot 被强杀时 `
 
 DEFAULT_MAX_PAGE_CHARS = 3000
 """回给模型的页面文本上限（字符数），防止把整棵 VOM 树塞进上下文。"""
+
+DEFAULT_LOG_MAX_OUTPUT_LENGTH = 2048
+"""调试日志中工具返回与 bsk 命令输出的最大字符截断长度。默认 2048，<= 0 表示不截断。"""
+
+LOG_MAX_OUTPUT_LENGTH_MAX = 1_000_000
+"""调试日志最大字符截断长度的上限。超过此上限回退为默认值。"""
 
 DEFAULT_ENABLE_EVALUATE = False
 """是否允许在页面里执行任意 JavaScript（``bsk evaluate``）。默认关闭。
@@ -788,6 +796,10 @@ class Settings:
     详见 :data:`DEFAULT_LAZY_DEBUG_TOOL`。
     """
 
+    log_max_output_length: int
+    """调试日志中工具返回与 bsk 命令输出的最大字符截断长度。默认 2048，<= 0 表示不截断。"""
+
+
 
 def parse_settings(raw: dict | None, *, data_dir: str = "") -> Settings:
     """从 AstrBot 的原始配置 dict 构造 :class:`Settings`。
@@ -892,6 +904,14 @@ def parse_settings(raw: dict | None, *, data_dir: str = "") -> Settings:
         lazy_debug_tool=_as_bool(
             raw.get("lazy_debug_tool"), DEFAULT_LAZY_DEBUG_TOOL
         ),
+        log_max_output_length=(
+            DEFAULT_LOG_MAX_OUTPUT_LENGTH
+            if _as_int(raw.get("log_max_output_length"), DEFAULT_LOG_MAX_OUTPUT_LENGTH)
+            > LOG_MAX_OUTPUT_LENGTH_MAX
+            else _as_int(
+                raw.get("log_max_output_length"), DEFAULT_LOG_MAX_OUTPUT_LENGTH
+            )
+        ),
     )
 
 
@@ -987,6 +1007,13 @@ def validate_settings(s: Settings) -> list[str]:
             "名单外的用户即使是管理员之外的普通人也会被挡住；而 AstrBot 管理员"
             "始终可用。也就是说，这份白名单会让名单里的非管理员也能操作浏览器。"
             "如果不希望这样，请清空 `allowed_users`。"
+        )
+
+    log_max = _num(getattr(s, "log_max_output_length", DEFAULT_LOG_MAX_OUTPUT_LENGTH))
+    if log_max is not None and log_max > LOG_MAX_OUTPUT_LENGTH_MAX:
+        problems.append(
+            f"`log_max_output_length` 设成了 {log_max:g}，超过了推荐上限 {LOG_MAX_OUTPUT_LENGTH_MAX}。"
+            f"过大的单条日志可能严重拖慢控制台输出或刷满磁盘。建议调小或设为默认值 {DEFAULT_LOG_MAX_OUTPUT_LENGTH}。"
         )
 
     return problems

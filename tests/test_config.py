@@ -277,6 +277,21 @@ class TestClampingBounds(unittest.TestCase):
         self.assertEqual(parse_settings({"max_page_chars": 200}).max_page_chars, 200)
         self.assertEqual(parse_settings({"max_page_chars": 20000}).max_page_chars, 20000)
 
+    def test_log_max_output_length_default_and_custom(self) -> None:
+        self.assertEqual(parse_settings({}).log_max_output_length, 2048)
+        self.assertEqual(
+            parse_settings({"log_max_output_length": 500}).log_max_output_length, 500
+        )
+        self.assertEqual(
+            parse_settings({"log_max_output_length": 0}).log_max_output_length, 0
+        )
+        self.assertEqual(
+            parse_settings({"log_max_output_length": -1}).log_max_output_length, -1
+        )
+        self.assertEqual(
+            parse_settings({"log_max_output_length": 2_000_000}).log_max_output_length, 2048
+        )
+
 
 class TestSessionScope(unittest.TestCase):
     """只接受 umo / user，其他回退 umo。"""
