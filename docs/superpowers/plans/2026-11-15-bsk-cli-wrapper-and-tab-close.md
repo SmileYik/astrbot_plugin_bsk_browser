@@ -4,7 +4,7 @@
 
 **Goal:** Implement `BskCli` semantic wrapper layer and safe tab closure workflow (`select` -> `sync` -> `close`), eliminate raw `runner.run(...)` calls, and prevent browser tab leaks during session cleanup.
 
-**Architecture:** 
+**Architecture:**
 1. New `bsk/cli.py` defines `BskCli`, wrapping bsk CLI commands into strongly-typed methods with detailed docstrings, default arguments, and `close_tab_safe` composition logic.
 2. `BskRunner` associates `self.cli = BskCli(self)` so components and tests can access it seamlessly.
 3. `SessionManager` and `BskService` replace raw `runner.run(...)` calls with `BskCli` semantic methods and use `close_tab_safe` on all session tabs during cleanup.

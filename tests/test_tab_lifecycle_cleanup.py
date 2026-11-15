@@ -324,7 +324,3 @@ def test_stop_entry_safely_closes_all_tabs():
     asyncio.run(_test())
 
 
-
-
-
-

@@ -84,7 +84,7 @@
 ```python
 class BskCli:
     """bsk 命令行接口的强类型语义化包装客户端。
-    
+
     负责将高阶方法调用转换为严格符合 bsk CLI 协议的参数列表，
     并由底层的 BskRunner 调度执行。
     """
@@ -220,7 +220,7 @@ class BskCli:
         timeout: float = 5.0,
     ) -> BskResult:
         """安全关闭标签页的标准业务流程。
-        
+
         执行步骤：
         1. select_tab: 确保目标标签处于激活/聚焦状态，避免后台状态同步失效；
         2. sync_tab: 提取最新的 observation_id 与 context_id；
@@ -298,7 +298,7 @@ class BskCli:
      # 遍历所有标签页（包括次级弹窗页与主页），依次执行 safe_close
      for tid in tabs:
          await self._cli.close_tab_safe(entry.session.session_id, tid)
-     
+
      # 若 Agent Window 仍未自动关闭，再兜底执行 stop_session
      await self._cli.stop_session(entry.session.session_id)
      ```

@@ -161,6 +161,7 @@ class BskCli:
         tab_id: int | str,
         *,
         timeout: float = 5.0,
+        raise_on_error: bool = False,
     ) -> BskResult:
         """安全关闭标签页的标准业务流程。
 
@@ -178,6 +179,7 @@ class BskCli:
             session: 浏览器会话标识 (Session ID)。
             tab_id: 待关闭的标签页 ID (必填)。
             timeout: 每步命令的超时时间（秒，默认 5.0）。
+            raise_on_error: 关闭操作最终失败时是否抛出异常（默认 False）。
 
         Returns:
             BskResult 最终 close_tab 的执行结果。
@@ -210,6 +212,7 @@ class BskCli:
             observation=obs_id,
             context=ctx_id,
             timeout=timeout,
+            raise_on_error=raise_on_error,
         )
 
     async def list_tabs(

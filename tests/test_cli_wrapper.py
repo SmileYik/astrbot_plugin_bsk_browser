@@ -196,5 +196,3 @@ def test_service_uses_cli():
         assert status_info.get("daemon", {}).get("version") == "0.5.0"
         runner.run_or_raise.assert_any_await(["status", "--json"], timeout=5.0)
     asyncio.run(_test())
-
-
