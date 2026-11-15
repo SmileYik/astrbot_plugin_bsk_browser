@@ -1725,8 +1725,9 @@ class SessionManager:
                 ["tab", "list", "--scope", "agent", "--session", entry.session.session_id, "--json"],
                 timeout=5.0,
             )
-            tab_list = res.data if isinstance(res.data, list) else []
-            if len(tab_list) > 1:
+            raw = res.data
+            tab_list = raw.get("tabs", []) if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
+            if isinstance(tab_list, list) and len(tab_list) > 1:
                 for t in tab_list[1:]:
                     if isinstance(t, dict):
                         tid = t.get("tab_id", t.get("id"))
@@ -1736,10 +1737,10 @@ class SessionManager:
                                     ["tab", "close", str(tid), "--session", entry.session.session_id, "--json"],
                                     timeout=5.0,
                                 )
-                            except Exception:
-                                pass
-        except Exception:
-            pass
+                            except Exception as exc:  # noqa: BLE001
+                                self._logger.debug("关闭多余标签页 %s 失败（忽略）：%r", tid, exc)
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("获取 Agent 标签页列表以清理失败（忽略）：%r", exc)
 
         return await self._stop_session_id(entry.session.session_id)
 

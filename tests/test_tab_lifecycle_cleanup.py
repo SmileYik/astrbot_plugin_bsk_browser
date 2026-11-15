@@ -87,3 +87,46 @@ def test_render_tabs_renders_switched_focus_notification():
     assert "【焦点已切回】" in rendered
     assert "id=101" in rendered
     assert "Baidu Search" in rendered
+
+
+def test_session_manager_stop_entry_sweeps_tabs_from_dict_payload():
+    async def _test():
+        from unittest.mock import AsyncMock, MagicMock
+        from bsk.session import SessionManager, _Entry
+        from bsk.models import BskSession
+
+        runner = MagicMock()
+        # 模拟 tab list 返回字典载荷 {"tabs": [...]}
+        async def mock_run(args, timeout=None, **kwargs):
+            cmd = " ".join(args)
+            if "tab list" in cmd:
+                return MagicMock(data={
+                    "tabs": [
+                        {"tab_id": 101, "title": "Baidu", "url": "https://www.baidu.com"},
+                        {"tab_id": 102, "title": "Tieba", "url": "https://tieba.baidu.com"},
+                    ]
+                })
+            elif "tab close" in cmd:
+                return MagicMock(data={"tab_id": 102})
+            elif "session stop" in cmd:
+                return MagicMock(data={}, exit_code=0)
+            return MagicMock(data={})
+
+        runner.run = AsyncMock(side_effect=mock_run)
+        runner.run_or_raise = AsyncMock(side_effect=mock_run)
+        sm = SessionManager(runner, MagicMock())
+        
+        session = BskSession(session_id="test_sess", agent_window_id=1)
+        entry = _Entry(key="k1", session=session, lock=asyncio.Lock(), last_used=100.0)
+
+        success = await sm._stop_entry(entry)
+        assert success is True
+
+        # 验证确实对 tab_id=102 发起了 tab close
+        close_calls = [call for call in runner.run.call_args_list if "close" in call[0][0]]
+        assert len(close_calls) == 1
+        assert "102" in close_calls[0][0][0] or "102" in close_calls[0][0]
+
+    asyncio.run(_test())
+
+
