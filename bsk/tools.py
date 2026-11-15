@@ -274,70 +274,39 @@ _DEBUG_CONTROL_KEYS: tuple[str, ...] = (
 _DEBUG_PROPERTY_DESCRIPTIONS: dict[str, str] = {
     "id": (
         "request/operation/rule_enable/rule_disable/rule_remove/replay/pin/unpin 必填"
-        "：request、operation、rule 的 ID，或 wait 的命令 ID（按 action 解释）。"
+        "：目标对象 ID 或 wait 命令 ID。"
     ),
     "rule": (
-        "rule_add 必填：规则的 JSON 字符串。形如 "
+        "rule_add 必填：规则 JSON 字符串。形如 "
         '{"match":{"url":"https://a.com/*","method":"GET","resource_type":"Fetch"},'
         '"effect":{"type":"block"},"times":1}。'
-        "url 必须是绝对地址，* 匹配路径与查询串；默认只作用于 Fetch/XHR，可加 Document。"
-        "effect.type 取 block（拦截）、modify（改写同源 url/method/headers/body）或 "
-        "mock（用 status/body/headers/delay_ms 伪造响应，delay_ms 0..10000）。"
-        "只支持文本 body；times=0 表示一直生效到禁用或抓包结束；规则在本地生效，先匹配先赢。"
-        "最大 81920 字符，必须是合法 JSON。"
+        "effect.type 取 block/modify/mock。"
     ),
     "replay": (
-        "replay 必填：要重放的请求 JSON 字符串，形如 "
-        '{"key":"唯一标识","url":"https://a.com/api","method":"POST","headers":{}, "body":"..."}。'
-        "只会发送一次，重试请复用同一个 key。只允许同源；URL 或 body 有改动/被截断/"
-        "未校验时必须整体替换而不是局部修补。URL 最长 16384 字符，抓到的 URL 最长 2048。"
-        "重放可能会真的写入服务端数据。最大 81920 字符，必须是合法 JSON。"
+        "replay 必填：重放请求 JSON 字符串。形如 "
+        '{"key":"id","url":"https://a.com/api","method":"POST","headers":{},"body":"..."}。'
+        "重试复用相同 key。"
     ),
-    "slow_ms": "仅 aggregate 可用：慢请求阈值，0..60000 毫秒，默认 1000。",
-    "window_ms": "仅 duplicates 可用：重复请求的固定窗口，100..10000 毫秒，默认 1000。",
-    "include_controlled": (
-        "仅 aggregate/duplicates 可用：把规则命中与重放产生的请求也算进分析"
-        "（默认排除）。"
-    ),
-    "budget": (
-        "返回 JSON 的总字节预算，4096..262144，默认 65536；export 不受它限制。"
-        "结果里 omitted 为真时，按 next_since/next_offset 继续取。"
-    ),
-    "url": "requests/分析类 action：大小写敏感的 URL 子串过滤。",
-    "method": "requests/分析类 action：精确的 HTTP 方法，例如 GET、POST。",
-    "resource_type": "requests/分析类 action：精确的资源类型，例如 Fetch、XHR。",
-    "status": "requests/分析类 action：精确的 HTTP 状态码，100..599。",
-    "state": "requests/分析类 action：抓包状态过滤，取值 "
-    "pending/complete/failed/redirected/interrupted。",
-    "kind": "requests/分析类 action：流量分类，取值 all/business/resource/extension。",
-    "fields": (
-        "requests：要额外返回的字段，逗号分隔。身份字段与 body 可用性始终保留；"
-        "可选字段清单用 capabilities 查。"
-    ),
-    "wait_ms": (
-        "仅 wait 可用：等待时长，0..60000 毫秒，默认 10000。它只观察已有执行，"
-        "不会重新发送任何命令；命令结束不等于成功，要另看结果。"
-    ),
-    "command_id": (
-        "仅 wait 可用：要等待的命令 ID，来自 activity 或 session_busy 的报错；"
-        "不传表示等到空闲为止。"
-    ),
-    "output": "仅 export 可用：导出 JSON 的新文件路径。返回路径与大小，而不是完整抓包。",
-    "run_id": "抓包 ID，不传就用最近一次抓包。",
-    "name": "仅 start 可用：这次抓包的简短名字。",
-    "part": (
-        "request 详情投影，取值 metadata/request/response/headers/timing，"
-        "默认 metadata（不含 body 文本）。"
-    ),
-    "offset": (
-        "翻页偏移：body 字符偏移，或 pages/console/performance/分析类的条目偏移，"
-        "0..65536。performance/aggregate/duplicates 只能用 offset 翻页，不能用 since。"
-    ),
-    "max_chars": "body 切片长度，1..16384，默认 4096。",
-    "pointer": (
-        "RFC 6901 指针，指向完整的、已脱敏的 request/response JSON body；"
-        "必须同时把 part 设为 request 或 response。"
-    ),
+    "slow_ms": "仅 aggregate 可用：慢请求阈值（毫秒），默认 1000。",
+    "window_ms": "仅 duplicates 可用：重复请求窗口（毫秒），默认 1000。",
+    "include_controlled": "仅 aggregate/duplicates 可用：计入规则拦截与重放流量。",
+    "budget": "返回 JSON 字节预算（4096..262144），默认 65536。",
+    "url": "requests/分析类 action：URL 子串过滤。",
+    "method": "requests/分析类 action：HTTP 方法过滤（如 GET、POST）。",
+    "resource_type": "requests/分析类 action：资源类型过滤（如 Fetch、XHR）。",
+    "status": "requests/分析类 action：HTTP 状态码过滤（100..599）。",
+    "state": "requests/分析类 action：抓包状态过滤（pending/complete/failed 等）。",
+    "kind": "requests/分析类 action：流量分类（all/business/resource/extension）。",
+    "fields": "requests：额外返回的字段列表，逗号分隔。",
+    "wait_ms": "仅 wait 可用：等待时长（毫秒），默认 10000。",
+    "command_id": "仅 wait 可用：要等待的命令 ID；不传则等待至空闲。",
+    "output": "仅 export 可用：导出 JSON 文件路径。",
+    "run_id": "抓包 ID，不传默认最近一次抓包。",
+    "name": "仅 start 可用：本次抓包名称。",
+    "part": "request 详情投影（metadata/request/response/headers/timing），默认 metadata。",
+    "offset": "翻页偏移量（0..65536）。",
+    "max_chars": "body 切片长度，默认 4096。",
+    "pointer": "RFC 6901 JSON 指针，配合 part=request/response 使用。",
 }
 
 _DEBUG_PROPERTY_TYPES: dict[str, str] = {
@@ -771,62 +740,41 @@ properties 是该工具**全部 action 参数的并集**。
 
 TOOL_DESCRIPTIONS: dict[str, str] = {
     "bsk_session": (
-        "管理本插件自己的浏览器会话。action 取 start / open / sync / stop / list："
-        "open 一步完成启动会话、打开网页并同步页面控制权（推荐）；"
-        "sync 同步当前页面的语义元素结构并建立交互控制上下文（页面跳转后必调）；"
-        "start 打开一个 Agent Window；stop 关闭自有会话；list 列出本插件创建的会话。"
+        "管理浏览器会话。action 取 open / sync / start / stop / list："
+        "open 一步完成会话启动、网页导航与控制权同步（推荐）；"
+        "sync 同步语义结构与交互上下文；start 开启窗口；stop 关闭会话；list 列出自有会话。"
     ),
     "bsk_page": (
-        "在 Agent Window 的当前标签页上导航与等待。action 取 navigate / back / forward / "
-        "reload / wait。navigate 必填 url；reload 可加 hard 绕缓存；"
-        "wait 只等页面生命周期事件、不做任何导航。页面变化或跳转后，推荐优先调用 "
-        "bsk_session(action='sync') 同步控制权，或用 bsk_inspect(action='observe') 查看最新内容。"
+        "页面导航与生命周期等待。action 取 navigate / back / forward / reload / wait。"
+        "navigate 必填 url；reload 可选 hard；wait 等待事件。"
+        "跳转后推荐优先调用 bsk_session(action='sync') 或 bsk_inspect(action='observe')。"
     ),
     "bsk_inspect": (
-        "读取页面状态。action 取 observe / snapshot / html / screenshot / console / network。"
-        "优先 observe（最常用，大页面自适应输出结构大纲；支持 query 关键词快速定位元素、"
-        "offset/limit 范围切片浏览，及 view 切换 outline/elements/text 视图）。"
-        "snapshot 是无游标静态树；html 取原始 HTML（有上限）；screenshot 回文字描述；"
-        "console/network 支持 since/limit 增量读。抓包与网络控制改用 bsk_debug。"
+        "检查页面状态。action 取 observe / snapshot / html / screenshot / console / network。"
+        "优先 observe（提取结构大纲与元素编号，支持 query 过滤、offset/limit 分片与 view 切换）；"
+        "snapshot 取静态树；screenshot 截图；console/network 增量读。抓包与网络控制改用 bsk_debug。"
     ),
     "bsk_debug": (
-        "调试与网络流量控制：抓包、分析、导出证据，以及显式控制请求。"
-        "什么时候用它：要查接口返回、慢请求、重复请求，或要拦截/改写/伪造请求时。"
-        "action 取 performance / aggregate / duplicates / capabilities / activity / "
-        "wait / pin / unpin / start / stop / status / requests / request / operations / "
-        "operation / console / pages / export / rules / rule_add / rule_enable / "
-        "rule_disable / rule_remove / replay。action 就是子动作本身。"
-        "典型顺序：先 start 开抓包，再去访问页面，最后读结果。"
-        "rule_add/rule_enable 能拦截、改写或伪造真实请求；"
-        "replay 会带着用户的 cookie 重新发送一次请求，可能改动服务端数据。"
+        "网络调试与流量控制。什么时候用它：排查接口响应、慢请求、重复请求或拦截重放流量。"
+        "action 包含 performance / aggregate / requests / export / rules / replay 等。"
+        "可配合 bsk_load_tools 按需挂载使用。"
     ),
     "bsk_load_tools": (
-        "按需加载能力。目前只有一组：debug（抓包与网络调试）。"
-        "当你需要查接口返回、慢请求、重复请求，或要拦截/改写/重放某个请求时，"
-        "先调用本工具加载 debug，之后就能使用 bsk_debug"
-        "（它的 action 取 performance / aggregate / requests / rule_add / replay 等）。"
-        "注意 bsk_debug 平时不在工具列表里，不先加载就用不了它。"
-        "加载只在当前这一轮对话里有效，用户的下一条消息需要重新加载。"
+        "按需加载扩展工具组（当前支持 debug）。"
+        "需要查接口、抓包或重放请求时，先调用本工具挂载，即可在当前这一轮对话中使用 bsk_debug。"
     ),
     "bsk_interact": (
-        "与当前标签页交互。action 取 click / hover / wheel / scroll-to / focus / blur / fill / "
-        "select / press。target 是快照引用（如 @e3）或 CSS 选择器；click/hover/scroll-to/"
-        "focus/blur/fill/select 必填 target，fill 还要 value，select 还要 values，"
-        "press 必填 key 并可先用 target 聚焦。滚动提示：滚动到特定元素请优先用 scroll-to（配合 target）；"
-        "盲滚时用 wheel（向下滚动务必传正数 delta_y 如 500，建议配合 target 指定可滚动区域）。"
-        "wheel 要求 delta_x 或 delta_y 至少一个非零。操作后要 observe 一次确认结果。"
+        "页面元素交互。action 取 click / hover / wheel / scroll-to / focus / blur / fill / select / press。"
+        "target 为元素编号（如 @e3）或 CSS 选择器；fill 需 value；press 需 key；"
+        "滚动推荐优先 scroll-to（配合 target）或 wheel。交互后推荐调用 observe 确认结果。"
     ),
     "bsk_tabs": (
-        "管理当前会话可见的标签页。action 取 list / create / select / close / borrow / return。"
-        "select/close/borrow/return 必填 tab_id，取自 list 或 create。"
-        "borrow 会把用户自己的标签页移进 Agent Window，用完请尽快 return。"
+        "管理当前会话可见标签页。action 取 list / create / select / close / borrow / return。"
+        "除 list 外均需 tab_id；borrow 借用用户标签页，用毕请及时 return。"
     ),
     "bsk_assist": (
-        "显示设置与求助真人。action 取 resize / emulate / request-help。"
-        "resize 必填 width 与 height（各 100..7680）；emulate 用 device 或 width+height(+mobile)，"
-        "或单独用 off 清除；request-help 必填 prompt，可以等用户完成页内步骤。"
-        "outcome 里只有 continued 与 completed 表示用户已完成，"
-        "cancelled/timed_out/navigated/disabled 都不是。"
+        "窗口规格设置与真人求助。action 取 resize / emulate / request-help。"
+        "resize 设定宽高；emulate 模拟设备；request-help 提示用户人工完成扫码或验证步骤。"
     ),
 }
 """工具名 → 给模型看的中文描述，键与 :data:`TOOL_SCHEMAS` 完全一致。"""

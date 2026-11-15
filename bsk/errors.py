@@ -306,11 +306,7 @@ def classify(
     if reason in OUTCOME_UNKNOWN_REASONS or effect_state == "unknown":
         return BskOutcomeUnknown(
             detail,
-            friendly=(
-                "浏览器连接中断，上一步操作的结果无法确认。"
-                "为避免重复操作，我不会自动重试。"
-                "请先看一眼浏览器里的实际状态，再决定是否继续。"
-            ),
+            friendly="浏览器连接中断，操作结果未知。请先确认页面实际状态，避免重复操作。",
             code=code,
             exit_code=exit_code,
             reason=reason,
@@ -322,7 +318,7 @@ def classify(
         if reason in ("ref_not_found", "selector_not_found"):
             return BskUserError(
                 detail,
-                friendly="目标元素不存在或已失效（页面可能已刷新或发生跳转）。请重新查看页面并使用最新元素编号。",
+                friendly="目标元素不存在或已失效（页面可能已刷新或发生跳转），请重新查看页面并使用最新元素编号。",
                 code=code,
                 exit_code=exit_code,
                 reason=reason,
@@ -330,7 +326,7 @@ def classify(
             )
         return BskSessionGone(
             detail,
-            friendly="浏览器会话已失效（可能空闲太久被回收），正在重新建立。",
+            friendly="浏览器会话已失效（可能因空闲被回收），正在重新建立。",
             code=code,
             exit_code=exit_code,
             reason=reason,
@@ -341,7 +337,7 @@ def classify(
     if code == CODE_SESSION_BUSY:
         return BskSessionBusy(
             detail,
-            friendly="浏览器正忙（上一条操作还没结束），稍后重试。",
+            friendly="浏览器正忙（上一操作未结束），请稍后重试。",
             code=code,
             exit_code=exit_code,
             reason=reason,
@@ -352,13 +348,15 @@ def classify(
         if reason == "element_not_visible":
             friendly = "目标元素当前不在视口可视范围内，请滚动页面使其进入视野后再操作。"
         elif reason == "frame_unobservable":
-            friendly = "当前页面处于空白页或受限协议页面（如 about:blank），无法读取或操作元素。"
+            friendly = "当前页面处于空白页或受限协议页面，无法读取或操作元素。"
         elif reason == "agent_window_scope":
-            friendly = "浏览器拒绝了这次操作：该动作只允许在 bsk 自己的窗口里执行（若需操作其它标签页，请先使用 bsk_tabs(action='borrow') 借用）。"
+            friendly = "该动作只允许在 bsk 自己的窗口里执行（操作其他标签页请先使用 bsk_tabs(action='borrow') 借用）。"
         elif reason == "cooperation_sync_required":
             friendly = "当前页面控制权未同步或已失效，请先调用 bsk_session(action='sync') 同步页面控制权后再操作。"
-        elif reason in ("observation_required", "control_context_invalid"):
-            friendly = "当前页面状态或控制上下文已改变（需要有效观察令牌），请先调用 bsk_session(action='sync') 同步页面控制权与观察令牌后再操作。"
+        elif reason == "observation_required":
+            friendly = "页面缺少有效观察令牌，请先调用 bsk_session(action='sync') 同步页面控制权与观察令牌后再操作。"
+        elif reason == "control_context_invalid":
+            friendly = "当前页面控制上下文已改变，请先调用 bsk_session(action='sync') 同步页面控制权与观察令牌后再操作。"
         elif reason == "control_authority_required":
             friendly = "当前页面需要用户控制权或外部确认，暂时无法直接操作。"
         else:
@@ -377,7 +375,7 @@ def classify(
     if exit_code == EXIT_TIMEOUT:
         return BskTimeout(
             detail,
-            friendly="网页响应太慢，操作超时了。可以稍后重试，或换一个更快的页面。",
+            friendly="网页响应超时，可稍后重试或检查目标页面。",
             code=code,
             exit_code=exit_code,
             reason=reason,
@@ -387,10 +385,7 @@ def classify(
     if exit_code == EXIT_BROWSER:
         return BskBrowserError(
             detail,
-            friendly=(
-                "浏览器层面出错了。请确认浏览器和 bsk 扩展还在正常运行"
-                "（可以看浏览器工具栏里的扩展图标是否为已连接）。"
-            ),
+            friendly="浏览器层面异常，请确认浏览器及 bsk 扩展连接正常。",
             code=code,
             exit_code=exit_code,
             reason=reason,
@@ -400,7 +395,7 @@ def classify(
     if exit_code == EXIT_VERSION:
         return BskVersionError(
             detail,
-            friendly="bsk 命令行与浏览器扩展的版本不一致，请把它们都升级到最新版。",
+            friendly="bsk CLI 与浏览器扩展版本不一致，请升级至最新版本。",
             code=code,
             exit_code=exit_code,
             reason=reason,
@@ -410,7 +405,7 @@ def classify(
     if exit_code == EXIT_PROTOCOL:
         return BskProtocolError(
             detail,
-            friendly="与 bsk 后台服务的通信失败了。可以在终端执行 `bsk doctor` 检查环境。",
+            friendly="与 bsk 后台服务通信失败，可在终端执行 `bsk doctor` 检查环境。",
             code=code,
             exit_code=exit_code,
             reason=reason,
@@ -421,8 +416,7 @@ def classify(
     if code:
         friendly = f"操作失败：{detail}"
     elif stderr.strip():
-        # clap 参数错误走这里：没有 JSON，只有 stderr 文本。
-        friendly = f"命令参数有问题，这是个 bug，请反馈：{stderr.strip()[:200]}"
+        friendly = f"命令参数有误：{stderr.strip()[:200]}"
     else:
         friendly = f"操作失败（退出码 {exit_code}）：{detail}"
 

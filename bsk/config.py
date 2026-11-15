@@ -984,65 +984,43 @@ def validate_settings(s: Settings) -> list[str]:
     timeout = _num(s.command_timeout_sec)
     if timeout is not None and timeout >= ASTRBOT_TOOL_TIMEOUT_LIMIT_SEC:
         problems.append(
-            f"`command_timeout_sec` 设成了 {timeout:g} 秒，超过了 AstrBot 单次工具调用"
-            f"的 {ASTRBOT_TOOL_TIMEOUT_LIMIT_SEC:g} 秒上限。这一项是所有 bsk 命令的"
-            "统一超时，值得再大也没用：AstrBot 会在命令返回之前就掐断这次调用，"
-            "机器人只会看到一句失败，而浏览器那边可能还在动。"
-            f"建议改到 {DEFAULT_COMMAND_TIMEOUT_SEC:g} 秒左右"
-            "（插件最多只接受 110 秒）。注意 AstrBot 这一项默认 120 秒，而且它才是"
-            "真正的天花板：插件会把自己的超时钳到它之下（留 5 秒余量），"
-            "所以你把本项调得再大也不会超过框架允许的时间。"
+            f"`command_timeout_sec` 设为 {timeout:g} 秒，超过 AstrBot 单次工具调用上限（{ASTRBOT_TOOL_TIMEOUT_LIMIT_SEC:g} 秒）。"
+            f"框架将提前超时掐断调用。建议设为 {DEFAULT_COMMAND_TIMEOUT_SEC:g} 秒以内。"
         )
 
     idle = _num(s.idle_release_sec)
     if idle is not None and idle >= BSK_SESSION_RECLAIM_SEC:
         problems.append(
-            f"`idle_release_sec` 设成了 {idle:g} 秒，但 bsk 自己会在会话空闲 5 分钟"
-            f"（{BSK_SESSION_RECLAIM_SEC:g} 秒）时把会话回收掉，所以设得再大也没有用："
-            "插件会拿着一个已经被回收的会话去操作，失败后再重建，白多一次往返。"
-            f"建议设在 {DEFAULT_IDLE_RELEASE_SEC:g} 秒以内（插件最多只接受 299 秒）。"
+            f"`idle_release_sec` 设为 {idle:g} 秒，超过 bsk 会话自动回收时间（{BSK_SESSION_RECLAIM_SEC:g} 秒）。"
+            f"建议设为 {DEFAULT_IDLE_RELEASE_SEC:g} 秒以内。"
         )
 
     if not s.admin_only:
         problems.append(
-            "【安全提醒】`admin_only` 已经关闭：任何能给机器人发消息的人都能操控"
-            "你这台机器上已登录的浏览器 —— 读你的网页、点按钮、填表单、截图。"
-            "如果只是想给某个人用，请把 `admin_only` 改回开启，并把对方的用户 ID"
-            "填进 `allowed_users`。"
+            "【安全提醒】`admin_only` 已关闭：任何能给机器人发消息的人都可操控浏览器。"
+            "如仅授权特定用户，请开启 `admin_only` 并配置 `allowed_users`。"
         )
 
     # evaluate 是本插件风险最高的能力，它的提醒必须单独一条，且说清
     #   "它能做什么"而不是"它被打开了" —— 用户要判断的是风险，不是开关状态。
     if _as_bool(getattr(s, "enable_evaluate", False), False):
         problems.append(
-            "【安全提醒】`enable_evaluate` 已开启：模型现在可以在你已登录的页面里"
-            "执行任意 JavaScript。这与点击、输入有本质区别 —— 后者是你在浏览器窗口里"
-            "看得见的动作，而执行脚本不是："
-            "它能静默读取页面上的任何数据（邮箱正文、后台列表、登录 token），"
-            "能带着你的登录状态发请求或提交表单，还能自动点掉页面的确认弹窗"
-            "（实测 `confirm` 会被自动确认为「确定」）。"
-            "如果只是想让它读页面文字，`enable_evaluate` 应保持关闭；"
-            "确实需要时，请同时确认 `evaluate_require_admin` 是开启的"
-            "（默认开启），并且清楚这个机器人会被哪些人使用。"
+            "【安全提醒】`enable_evaluate` 已开启：允许执行任意 JavaScript，存在静默读取数据或提交请求等安全风险。"
+            "如仅需浏览页面请保持关闭，开启时请确保 `evaluate_require_admin` 处于启用状态。"
         )
 
     if _as_bool(getattr(s, "enable_evaluate", False), False) and not _as_bool(
         getattr(s, "evaluate_require_admin", True), True
     ):
         problems.append(
-            "【安全提醒】`enable_evaluate` 与「执行脚本仅限管理员」是同时关闭的："
-            "现在任何能跟机器人对话的人（包括 `allowed_users` 白名单里的人，以及"
-            "`admin_only=false` 时所有能发消息的人）都可以让你的浏览器执行任意 "
-            "JavaScript，读取或提交你已登录账号里的任何内容。"
-            "除非你完全清楚后果，否则请把 `evaluate_require_admin` 改回开启。"
+            "【高危安全提醒】`enable_evaluate` 开启且 `evaluate_require_admin` 关闭：普通用户亦可执行任意 JavaScript。"
+            "除非明确知晓风险，否则请开启 `evaluate_require_admin`。"
         )
 
     max_sessions = _num(s.max_sessions)
     if max_sessions is not None and max_sessions > MAX_SESSIONS_WARN_AT:
         problems.append(
-            f"`max_sessions` 设成了 {max_sessions:g}，同时在聊的用户多时会开"
-            f"{max_sessions:g} 个浏览器窗口，比较打扰人，也更容易撞上 bsk 的同时只允许"
-            "一个在途命令的限制。建议不要超过 5。"
+            f"`max_sessions` 设为 {max_sessions:g}：并发窗口过多易导致资源紧张或指令争用，建议不超过 5。"
         )
 
     # 复用解析器做归一化：无论用户把白名单填成什么形态，这里都能安全地数出条数。
@@ -1050,18 +1028,14 @@ def validate_settings(s: Settings) -> list[str]:
     if users and s.admin_only:
         shown = "、".join(users[:5]) + ("…" if len(users) > 5 else "")
         problems.append(
-            f"`allowed_users` 里填了 {len(users)} 个用户（{shown}），同时 `admin_only` "
-            "也是开启的。实际规则是白名单优先：名单里的用户会被放行，"
-            "名单外的用户即使是管理员之外的普通人也会被挡住；而 AstrBot 管理员"
-            "始终可用。也就是说，这份白名单会让名单里的非管理员也能操作浏览器。"
-            "如果不希望这样，请清空 `allowed_users`。"
+            f"`allowed_users` 已配置 {len(users)} 个用户（{shown}）且 `admin_only` 开启。"
+            "生效规则为白名单优先，名单内的非管理员也将获得浏览器操作权限。如需严格限管理员请清空白名单。"
         )
 
     log_max = _num(getattr(s, "log_max_output_length", DEFAULT_LOG_MAX_OUTPUT_LENGTH))
     if log_max is not None and log_max > LOG_MAX_OUTPUT_LENGTH_MAX:
         problems.append(
-            f"`log_max_output_length` 设成了 {log_max:g}，超过了推荐上限 {LOG_MAX_OUTPUT_LENGTH_MAX}。"
-            f"过大的单条日志可能严重拖慢控制台输出或刷满磁盘。建议调小或设为默认值 {DEFAULT_LOG_MAX_OUTPUT_LENGTH}。"
+            f"`log_max_output_length` 设为 {log_max:g}，超过推荐上限 {LOG_MAX_OUTPUT_LENGTH_MAX}，易拖慢输出或占满磁盘。建议调小。"
         )
 
     log_path = getattr(s, "log_file_path", "")
@@ -1071,8 +1045,7 @@ def validate_settings(s: Settings) -> list[str]:
 
             if Path(log_path.strip()).is_dir():
                 problems.append(
-                    f"`log_file_path`（{log_path.strip()}）指向了一个已有目录而不是文件。"
-                    "请填写具体的文件路径（如 `/path/to/bsk.log`），否则无法转存日志。"
+                    f"`log_file_path`（{log_path.strip()}）指向已有目录而非文件，请指定具体日志文件路径。"
                 )
         except Exception:
             pass

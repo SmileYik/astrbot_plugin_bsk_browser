@@ -988,15 +988,12 @@ class BskBrowserPlugin(Star):
             if is_admin:
                 return None
             return (
-                "你没有使用浏览器操作的权限。"
-                "（该插件配置了用户白名单，请联系管理员把你的 ID 加进去。）"
+                "无浏览器操作权限（白名单模式，请联系管理员添加）。"
             )
 
         if self.settings.admin_only and not self._safe_is_admin(event):
             return (
-                "浏览器操作仅限管理员使用。"
-                f"你的 ID 是 {sender or '未知'}，可以请管理员在插件配置里"
-                "把「仅管理员可用」关掉，或把你的 ID 加进白名单。"
+                f"浏览器操作仅限管理员使用（当前用户 ID: {sender or '未知'}）。"
             )
         return None
 
@@ -1028,15 +1025,6 @@ class BskBrowserPlugin(Star):
         3. 强制管理员：``evaluate_require_admin=True`` 且调用者不是管理员
            → 拒绝，即使 ``admin_only=False`` 也一样。
         4. 其余才交给 ``_denied()``，让白名单等既有规则继续生效。
-
-        第 3 条为什么要盖过 ``admin_only=False``：
-        ``admin_only=False`` 的语义是"我愿意把看得见的浏览器操作开放给
-        其他人"（点按钮、填表单，用户都能在窗口里看着）。而执行脚本是静默的。
-        如果让这个粗粒度的宽松开关顺手把最高危能力一起放开，就会出现一种
-        极难察觉的权限放大：管理员只是想"让群里的人也能查网页"，结果同时
-        交出了"在已登录页面里跑任意脚本"的能力。
-        所以这里先判 ``evaluate_require_admin``，判完才轮到 ``_denied()``
-        —— 而不是把两者写成一个条件。要开放就必须显式再关掉这一项。
         """
         if not self.settings.enabled:
             return "浏览器操作已在插件配置中停用。"
@@ -1044,11 +1032,7 @@ class BskBrowserPlugin(Star):
         # --- 第 1 道：独立开关（默认关闭）---
         if not self.settings.enable_evaluate:
             return (
-                "执行 JavaScript 的能力默认关闭，当前未启用。"
-                "（这是本插件风险最高的功能：它能在你已登录的页面里运行任意脚本，"
-                "读取页面数据、带你的登录状态发请求，而且不会像点击那样显示在"
-                "浏览器窗口里。如果确实需要，请让管理员在 AstrBot WebUI → 插件 → "
-                "本插件 → 配置 里打开「允许执行 JavaScript（enable_evaluate）」。）"
+                "执行 JavaScript 未启用（高危功能）。如需使用，请由管理员在插件配置中开启 `enable_evaluate`。"
             )
 
         # --- 第 2 道：强制管理员。放在 _denied() 之前，才能盖过 admin_only ---
@@ -1059,13 +1043,7 @@ class BskBrowserPlugin(Star):
             except Exception:  # noqa: BLE001
                 sender = ""
             return (
-                "执行 JavaScript 仅限 AstrBot 管理员使用，"
-                "且这一限制不受「仅管理员可用」总开关与用户白名单影响。"
-                f"你的 ID 是 {sender or '未知'}。"
-                "（这是刻意设计的：执行脚本能静默读取页面数据、提交表单，"
-                "风险远高于点击和输入，所以它比其他浏览器操作多一道独立的"
-                "管理员要求。管理员确实想放开时，需要单独关闭配置里的"
-                "「执行 JavaScript 仅限管理员」（evaluate_require_admin）。）"
+                f"执行 JavaScript 仅限管理员（当前用户 ID: {sender or '未知'}，不受白名单影响）。"
             )
 
         # --- 第 3 道：其余规则（admin_only / allowed_users）继续生效 ---
