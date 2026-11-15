@@ -383,6 +383,16 @@ class TestStringFields(unittest.TestCase):
             parse_settings({"screenshot_dir": r"  D:\shots  "}).screenshot_dir,
             r"D:\shots",
         )
+
+    def test_log_file_path_defaults_to_empty(self) -> None:
+        self.assertEqual(parse_settings({}).log_file_path, "")
+        self.assertEqual(parse_settings(None).log_file_path, "")
+
+    def test_log_file_path_strips_whitespace(self) -> None:
+        self.assertEqual(
+            parse_settings({"log_file_path": "  /tmp/bsk.log  "}).log_file_path,
+            "/tmp/bsk.log",
+        )
         self.assertEqual(parse_settings({"screenshot_dir": 123}).screenshot_dir, "")
 
 
@@ -575,6 +585,13 @@ class TestValidateSettings(unittest.TestCase):
             parse_settings({"admin_only": False, "max_sessions": 9, "allowed_users": ["1"]})
         )
         self.assertGreaterEqual(len(problems), 2)
+
+    def test_validate_settings_warns_if_log_file_path_is_directory(self) -> None:
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            s = parse_settings({"log_file_path": td})
+            problems = validate_settings(s)
+            self.assertTrue(any("目录" in p for p in problems))
 
     def test_does_not_raise_on_handmade_bad_settings(self) -> None:
         """启动路径上的函数：字段被塞了错误类型也不能抛异常。"""

@@ -47,6 +47,7 @@ __all__ = [
     "DEFAULT_LAZY_DEBUG_TOOL",
     "DEFAULT_LEGACY_FRINGE_TOOLS",
     "DEFAULT_LEGACY_TOOLS",
+    "DEFAULT_LOG_FILE_PATH",
     "DEFAULT_LOG_MAX_OUTPUT_LENGTH",
     "DEFAULT_MAX_PAGE_CHARS",
     "DEFAULT_MAX_SESSIONS",
@@ -182,6 +183,8 @@ journal 记录"本插件创建了哪些浏览器会话"。AstrBot 被强杀时 `
 
 DEFAULT_MAX_PAGE_CHARS = 3000
 """回给模型的页面文本上限（字符数），防止把整棵 VOM 树塞进上下文。"""
+
+DEFAULT_LOG_FILE_PATH = ""
 
 DEFAULT_LOG_MAX_OUTPUT_LENGTH = 2048
 """调试日志中工具返回与 bsk 命令输出的最大字符截断长度。默认 2048，<= 0 表示不截断。"""
@@ -729,6 +732,9 @@ class Settings:
     详见 :data:`DEFAULT_LAZY_DEBUG_TOOL`。
     """
 
+    log_file_path: str
+    """日志转存文件路径。默认空字符串（不转存）。"""
+
     log_max_output_length: int
     """调试日志中工具返回与 bsk 命令输出的最大字符截断长度。默认 2048，<= 0 表示不截断。"""
 
@@ -831,6 +837,9 @@ def parse_settings(raw: dict | None, *, data_dir: str = "") -> Settings:
         lazy_debug_tool=_as_bool(
             raw.get("lazy_debug_tool"), DEFAULT_LAZY_DEBUG_TOOL
         ),
+        log_file_path=_as_str(
+            raw.get("log_file_path"), DEFAULT_LOG_FILE_PATH
+        ).strip(),
         log_max_output_length=(
             DEFAULT_LOG_MAX_OUTPUT_LENGTH
             if _as_int(raw.get("log_max_output_length"), DEFAULT_LOG_MAX_OUTPUT_LENGTH)
@@ -942,5 +951,18 @@ def validate_settings(s: Settings) -> list[str]:
             f"`log_max_output_length` 设成了 {log_max:g}，超过了推荐上限 {LOG_MAX_OUTPUT_LENGTH_MAX}。"
             f"过大的单条日志可能严重拖慢控制台输出或刷满磁盘。建议调小或设为默认值 {DEFAULT_LOG_MAX_OUTPUT_LENGTH}。"
         )
+
+    log_path = getattr(s, "log_file_path", "")
+    if isinstance(log_path, str) and log_path.strip():
+        try:
+            from pathlib import Path
+
+            if Path(log_path.strip()).is_dir():
+                problems.append(
+                    f"`log_file_path`（{log_path.strip()}）指向了一个已有目录而不是文件。"
+                    "请填写具体的文件路径（如 `/path/to/bsk.log`），否则无法转存日志。"
+                )
+        except Exception:
+            pass
 
     return problems
