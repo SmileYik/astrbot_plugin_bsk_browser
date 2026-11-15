@@ -6,9 +6,11 @@ class TestSkillsDoc(unittest.TestCase):
     def test_skills_documents_exist_and_cover_required_guidance(self):
         base = Path(__file__).resolve().parent.parent / "skills"
         bsk_browser = base / "bsk-browser" / "SKILL.md"
-        baidu = base / "bsk-browse-baidu.com" / "SKILL.md"
-        bing = base / "bsk-browse-cn.bing.com" / "SKILL.md"
+        baidu = base / "bsk-browse-baidu" / "SKILL.md"
+        bing = base / "bsk-browse-bingcn" / "SKILL.md"
         
+        self.assertFalse((base / "bsk-browse-baidu.com").exists())
+        self.assertFalse((base / "bsk-browse-cn.bing.com").exists())
         for doc in (bsk_browser, baidu, bing):
             self.assertTrue(doc.exists(), f"Skill document missing: {doc}")
             content = doc.read_text(encoding="utf-8")

@@ -1,9 +1,9 @@
 ---
-name: bsk-browse-baidu.com
+name: bsk-browse-baidu
 description: 百度（baidu.com）搜索、页面结构识别、搜索结果精准滚动与分页导航指南。
 ---
 
-# bsk-browse-baidu.com (百度搜索实战指南)
+# bsk-browse-baidu (百度搜索实战指南)
 
 本技能依赖核心技能 `bsk-browser`，专精于在百度搜索（`https://www.baidu.com`）中执行页面结构区分、搜索提交、结果滚动、条目查阅与分页导航。
 

@@ -1,9 +1,9 @@
 ---
-name: bsk-browse-cn.bing.com
+name: bsk-browse-bingcn
 description: 微软必应中国（cn.bing.com）搜索、页面结构识别、搜索结果精准滚动与分页导航指南。
 ---
 
-# bsk-browse-cn.bing.com (必应中国搜索实战指南)
+# bsk-browse-bingcn (必应中国搜索实战指南)
 
 本技能依赖核心技能 `bsk-browser`，专精于在微软必应中国搜索（`https://cn.bing.com`）中执行页面结构区分、搜索提交、结果滚动、条目查阅与分页导航。
 
