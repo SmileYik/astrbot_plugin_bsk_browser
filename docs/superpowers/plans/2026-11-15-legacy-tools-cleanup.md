@@ -38,7 +38,7 @@
 - Consumes: `Settings` 数据类与 `parse_settings(raw: dict | None, *, data_dir: str = "") -> Settings`
 - Produces: `Settings.enable_status: bool = True`，移除 `Settings.legacy_tools` 与 `Settings.legacy_fringe_tools`
 
-- [ ] **Step 1: 在 `tests/test_config.py` 中编写 `enable_status` 的失败测试并移除已废弃字段测试**
+- [x] **Step 1: 在 `tests/test_config.py` 中编写 `enable_status` 的失败测试并移除已废弃字段测试**
 
 ```python
 # tests/test_config.py
@@ -55,12 +55,12 @@ def test_enable_status_from_string():
     assert s.enable_status is False
 ```
 
-- [ ] **Step 2: 运行测试验证失败**
+- [x] **Step 2: 运行测试验证失败**
 
 Run: `pytest astrbot_plugin_bsk_browser/tests/test_config.py -k "test_enable_status" -v`  
 Expected: FAIL (`AttributeError: 'Settings' object has no attribute 'enable_status'`)
 
-- [ ] **Step 3: 更新 `bsk/config.py` 与 `_conf_schema.json`**
+- [x] **Step 3: 更新 `bsk/config.py` 与 `_conf_schema.json`**
 
 1. 在 `bsk/config.py` 中：
    - 增加常量 `DEFAULT_ENABLE_STATUS: bool = True`；
@@ -83,12 +83,12 @@ Expected: FAIL (`AttributeError: 'Settings' object has no attribute 'enable_stat
      ```
    - 调整 `enable_evaluate` 的提示文本，明确指明“开启后向模型注册并允许使用 `bsk_evaluate` 工具”。
 
-- [ ] **Step 4: 运行 `test_config.py` 验证通过**
+- [x] **Step 4: 运行 `test_config.py` 验证通过**
 
 Run: `pytest astrbot_plugin_bsk_browser/tests/test_config.py -v`  
 Expected: PASS
 
-- [ ] **Step 5: 提交配置层变更**
+- [x] **Step 5: 提交配置层变更**
 
 ```bash
 git add astrbot_plugin_bsk_browser/bsk/config.py astrbot_plugin_bsk_browser/_conf_schema.json astrbot_plugin_bsk_browser/tests/test_config.py
@@ -108,7 +108,7 @@ git commit -m "refactor(config): add enable_status and remove legacy_tools/legac
 - Consumes: `Settings.enable_status`, `Settings.enable_evaluate`
 - Produces: 彻底移除 `bsk_open`, `bsk_read`, `bsk_act`, `bsk_close`, `bsk_logs` 方法；`initialize()` 精准控制 `bsk_status` 与 `bsk_evaluate` 的 `tool.active`
 
-- [ ] **Step 1: 编写工具注册与停用的单元测试**
+- [x] **Step 1: 编写工具注册与停用的单元测试**
 
 在 `tests/test_tool_registration.py`（或在 `test_tool_logging.py` 中）：
 验证：
@@ -117,12 +117,12 @@ git commit -m "refactor(config): add enable_status and remove legacy_tools/legac
 3. 当 `enable_evaluate=True` 时：`bsk_evaluate` 的 `active` 为 `True`；
 4. `main.py` 类中不存在 `bsk_open`、`bsk_read`、`bsk_act`、`bsk_close`、`bsk_logs` 属性。
 
-- [ ] **Step 2: 运行测试验证失败**
+- [x] **Step 2: 运行测试验证失败**
 
 Run: `pytest astrbot_plugin_bsk_browser/tests/test_tool_registration.py -v`  
 Expected: FAIL（属性仍存在或停用逻辑未触发）
 
-- [ ] **Step 3: 修改 `main.py` 实施清理与注册控制**
+- [x] **Step 3: 修改 `main.py` 实施清理与注册控制**
 
 1. 移除 `LEGACY_CORE_TOOL_NAMES`、`LEGACY_FRINGE_TOOL_NAMES`、`LEGACY_TOOL_NAMES` 常量定义；
 2. 定义 `OPTIONAL_STANDALONE_TOOLS: tuple[str, ...] = ("bsk_status", "bsk_evaluate")`；
@@ -153,12 +153,12 @@ Expected: FAIL（属性仍存在或停用逻辑未触发）
    - `bsk_logs`
 6. 更新 `test_tool_logging.py`，移除对这 5 个已删除工具的追踪断言，仅保留 8 个新工具及 `bsk_status`、`bsk_evaluate`。
 
-- [ ] **Step 4: 运行测试验证通过**
+- [x] **Step 4: 运行测试验证通过**
 
 Run: `pytest astrbot_plugin_bsk_browser/tests/test_tool_registration.py astrbot_plugin_bsk_browser/tests/test_tool_logging.py -v`  
 Expected: PASS
 
-- [ ] **Step 5: 提交插件核心变更**
+- [x] **Step 5: 提交插件核心变更**
 
 ```bash
 git add astrbot_plugin_bsk_browser/main.py astrbot_plugin_bsk_browser/tests/test_tool_logging.py astrbot_plugin_bsk_browser/tests/test_tool_registration.py
@@ -181,11 +181,11 @@ git commit -m "refactor(main): remove 5 legacy tools and manage status/evaluate 
 - Consumes: 更新后的 `main.py` 与 `bsk/config.py`
 - Produces: 干净的测试套件，无废弃测试文件，契约检查全绿
 
-- [ ] **Step 1: 删除废弃测试文件**
+- [x] **Step 1: 删除废弃测试文件**
 
 Run: `git rm astrbot_plugin_bsk_browser/tests/verify_legacy_groups.py astrbot_plugin_bsk_browser/tests/verify_logs_tool.py`
 
-- [ ] **Step 2: 更新引用了旧工具的测试文件**
+- [x] **Step 2: 更新引用了旧工具的测试文件**
 
 1. 在 `verify_compliance.py` / `verify_astrbot_contract.py` 中：
    - 更新工具总数校验（原 15 个工具已改为：8 个标准工具 + 2 个独立工具 = 10 个定义工具）；
@@ -195,12 +195,12 @@ Run: `git rm astrbot_plugin_bsk_browser/tests/verify_legacy_groups.py astrbot_pl
 3. 在 `verify_evaluate_gate.py` 中：
    - 验证 `enable_evaluate=False` 时 `active=False`；`enable_evaluate=True` 时 `active=True` 且运行时权限门禁正常工作。
 
-- [ ] **Step 3: 运行完整测试套件**
+- [x] **Step 3: 运行完整测试套件**
 
 Run: `pytest astrbot_plugin_bsk_browser/tests -v`  
 Expected: 全量 PASS，无断言失败
 
-- [ ] **Step 4: 提交测试套件清理与更新**
+- [x] **Step 4: 提交测试套件清理与更新**
 
 ```bash
 git add astrbot_plugin_bsk_browser/tests/
@@ -223,16 +223,16 @@ git commit -m "test: remove obsolete legacy tests and update tool contract tests
 - Consumes: 设计文档与最终保留的 8+2 工具体系
 - Produces: 符合 `AGENTS.md` 规范的精炼准确的技能文档与项目说明文档
 
-- [ ] **Step 1: 编写技能文档测试验证**
+- [x] **Step 1: 编写技能文档测试验证**
 
 在 `tests/test_skills_doc.py` 中：
 验证 `skill/bsk-browser/SKILL.md` 中不再出现 `bsk_close`、`bsk_logs`、`bsk_open`、`bsk_read`、`bsk_act`，且包含 `bsk_status`。
 
-- [ ] **Step 2: 运行测试验证当前状态**
+- [x] **Step 2: 运行测试验证当前状态**
 
 Run: `pytest astrbot_plugin_bsk_browser/tests/test_skills_doc.py -v`
 
-- [ ] **Step 3: 更新 `skill/bsk-browser/SKILL.md`**
+- [x] **Step 3: 更新 `skill/bsk-browser/SKILL.md`**
 
 1. 修改第 3 节核心准则中的“及时释放资源”：
    - 将 `- 停止整个会话：bsk_session(action="stop") 或 bsk_close()` 改为纯粹的 `- 停止整个会话：bsk_session(action="stop")（底层会自动清扫全部残留标签页，确保宿主机零孤儿窗口残留）。`
@@ -245,7 +245,7 @@ Run: `pytest astrbot_plugin_bsk_browser/tests/test_skills_doc.py -v`
    ```
 4. 确保语言精炼准确，满足 `AGENTS.md` 要求。
 
-- [ ] **Step 4: 更新 `metadata.yaml`、`README.md`、`ARCHITECTURE.md`、`CHANGELOG.md`**
+- [x] **Step 4: 更新 `metadata.yaml`、`README.md`、`ARCHITECTURE.md`、`CHANGELOG.md`**
 
 1. `metadata.yaml`：
    - 更新工具数量与工具描述（8 个标准工具 + 1 个默认自检工具 `bsk_status` = 9 个默认注册工具；`bsk_debug` 按需，`bsk_evaluate` 独立高危）；
@@ -256,12 +256,12 @@ Run: `pytest astrbot_plugin_bsk_browser/tests/test_skills_doc.py -v`
 3. `CHANGELOG.md`：
    - 记录新版本变更：彻底移除 5 个冗余旧工具，将 `bsk_status` 与 `bsk_evaluate` 改为独立配置控制注册。
 
-- [ ] **Step 5: 运行技能文档测试验证**
+- [x] **Step 5: 运行技能文档测试验证**
 
 Run: `pytest astrbot_plugin_bsk_browser/tests/test_skills_doc.py -v`  
 Expected: PASS
 
-- [ ] **Step 6: 提交文档同步变更**
+- [x] **Step 6: 提交文档同步变更**
 
 ```bash
 git add astrbot_plugin_bsk_browser/skill/ astrbot_plugin_bsk_browser/metadata.yaml astrbot_plugin_bsk_browser/README.md astrbot_plugin_bsk_browser/ARCHITECTURE.md astrbot_plugin_bsk_browser/CHANGELOG.md astrbot_plugin_bsk_browser/tests/test_skills_doc.py
@@ -275,7 +275,7 @@ git commit -m "docs: sync skills, metadata, architecture and changelog for legac
 **Files:**
 - Whole repository inspection
 
-- [ ] **Step 1: 全局扫描废弃工具名残留**
+- [x] **Step 1: 全局扫描废弃工具名残留**
 
 在项目根目录运行 grep 检查是否有任何无意保留的代码或调用：
 ```bash
@@ -283,12 +283,12 @@ git -C astrbot_plugin_bsk_browser grep -E "bsk_open|bsk_read|bsk_act|bsk_close|b
 ```
 （除 CHANGELOG 历史记录外，代码、当前文档、测试中应为 0 匹配）
 
-- [ ] **Step 2: 运行全量单元测试与集成测试**
+- [x] **Step 2: 运行全量单元测试与集成测试**
 
 Run: `pytest astrbot_plugin_bsk_browser/tests -v`  
 Expected: 全部测试 PASS（预计 900+ 个用例全绿），0 failed，0 warning（除不可避免的 pytest cache warning 外）。
 
-- [ ] **Step 3: 运行 git status 确认工作区完全干净**
+- [x] **Step 3: 运行 git status 确认工作区完全干净**
 
 Run: `git -C astrbot_plugin_bsk_browser status`  
 Expected: 工作树干净，所有 commit 已完成。
