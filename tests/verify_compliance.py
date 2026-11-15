@@ -128,15 +128,7 @@ def main() -> int:
         "否则 GitHub 的 licensee 会识别成 Other / NOASSERTION",
     )
     agpl_file = PROJECT / "LICENSE-AGPL"
-    check("LICENSE-AGPL 存在", agpl_file.is_file(), str(agpl_file.name))
-    if agpl_file.is_file():
-        agpl_text = agpl_file.read_text(encoding="utf-8")
-        check(
-            "LICENSE-AGPL 是完整 AGPL-3.0 文本",
-            "GNU AFFERO GENERAL PUBLIC LICENSE" in agpl_text
-            and len(agpl_text) > 30000,
-            f"{len(agpl_text)} 字节",
-        )
+    check("LICENSE-AGPL 已移除（仓库仅保留单一 MIT 协议）", not agpl_file.exists(), "仓库内仅保留单一 MIT 协议")
 
     # ------------------------------------------------------------------
     # 6. README 合规声明
@@ -144,9 +136,9 @@ def main() -> int:
     print("\n--- 6. README 的合规声明（MIT 不授予商标权，必须声明）---")
     readme = (PROJECT / "README.md").read_text(encoding="utf-8")
     check(
-        "README 第 12 节声明双许可（MIT OR AGPL-3.0-or-later）",
-        "MIT OR AGPL-3.0-or-later" in readme,
-        "LICENSE 只放 MIT 全文后，双许可声明在这里",
+        "README 第 12 节声明单一 MIT 许可",
+        "MIT" in readme and "LICENSE" in readme,
+        "LICENSE 遵循单一 MIT 全文",
     )
     check(
         "含「第三方非官方集成」声明",
@@ -182,6 +174,12 @@ def main() -> int:
         "插件 name 不含 browserskill",
         "browserskill" not in name.lower().replace("_", ""),
         f"name={name!r}",
+    )
+    author_val = str(meta.get("author", ""))
+    check(
+        "author 署名保留原作者并新增 SmileYik",
+        "SmileYik" in author_val and "JosephTian876" in author_val,
+        f"author={author_val!r}",
     )
     check(
         "display_name 不含 BrowserSkill 商标",

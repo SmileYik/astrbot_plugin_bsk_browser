@@ -297,9 +297,14 @@ def main() -> int:
         "自定义声明混进 LICENSE 会让 GitHub 识别成 Other",
     )
     check(
-        "README 保留双许可声明（MIT OR AGPL-3.0-or-later）",
-        "MIT OR AGPL-3.0-or-later" in readme,
-        "LICENSE 只放 MIT 全文后，声明在 README 第 12 节",
+        "LICENSE-AGPL 已移除（仓库仅保留单一 MIT 协议）",
+        not (PROJECT / "LICENSE-AGPL").exists(),
+        "仓库内仅保留单一 MIT 协议",
+    )
+    check(
+        "README 声明单一 MIT 许可",
+        "MIT" in readme and "LICENSE" in readme,
+        "LICENSE 遵循单一 MIT 全文",
     )
 
     # ---------------------------------------------------------------

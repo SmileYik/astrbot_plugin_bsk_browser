@@ -6,6 +6,11 @@
 
 ## [0.4.0] - 2026-11-15
 
+### 新增
+
+- **LLM 提示词注入 (`llm_prompt_injection`)**：增加长文本配置项，当且仅当当前用户拥有浏览器操作权限时，向大模型请求的 `system_prompt` 中安全注入浏览器操作指引或自定义系统提示词。
+- **开源协议单一 MIT 化与共同作者**：移除 `LICENSE-AGPL`，仓库仅保留单一 MIT 协议；作者署名添加 SmileYik（由 JosephTian876 与 SmileYik 共同维护）。
+
 ### 破坏性变更 (Breaking Changes)
 
 - **彻底移除 5 个冗余旧工具**：`bsk_open`、`bsk_read`、`bsk_act`、`bsk_close`、`bsk_logs`。它们的功能已由 `bsk_page`、`bsk_inspect`、`bsk_interact`、`bsk_session` 原生 100% 覆盖。
