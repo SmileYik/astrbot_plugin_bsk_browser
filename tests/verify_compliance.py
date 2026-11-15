@@ -234,7 +234,7 @@ def main() -> int:
     #   1. 有独立开关，且默认关闭
     #   2. 有"强制管理员"开关，且默认开启
     #   3. 是独立工具，可以被 AstrBot 原生的 tool_permissions 单独控制
-    #      （如果把它塞进 bsk_act 的动作列表里，就无法单独管控了）
+    #      （如果把它塞进其它工具的动作列表里，就无法单独管控了）
     #
     # 注意：这里不能再用 '"evaluate"' not in all_src 这种断言 ——
     # 那是"功能不存在"的写法。功能现在是存在的、只是默认关着。
@@ -256,7 +256,7 @@ def main() -> int:
         f"evaluate_require_admin 默认={eval_admin.get('default')!r}",
     )
     check(
-        "evaluate 是独立工具（非 bsk_act 的动作）",
+        "evaluate 是独立工具（非其它工具的动作）",
         "bsk_evaluate" in main_src,
         "以独立 llm_tool 形式注册，可被框架原生 tool_permissions 单独管控",
     )

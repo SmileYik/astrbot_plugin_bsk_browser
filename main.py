@@ -62,7 +62,7 @@ PLUGIN_NAME = "astrbot_plugin_bsk_browser"
 # 不需要很频繁：会话空闲阈值是分钟级的，30 秒粒度足够，且开销可忽略。
 IDLE_REAP_INTERVAL_SEC = 30.0
 
-# bsk_logs 一次最多展示多少条。输出长度必须可控（与本插件 max_page_chars
+# 控制台与网络日志一次最多展示多少条。输出长度必须可控（与本插件 max_page_chars
 # 同一个先例）：每条还可能带 200 字符的 URL 与 300 字符的正文。
 LOGS_RENDER_LIMIT = 50
 
@@ -710,7 +710,7 @@ class BskBrowserPlugin(Star):
         里把它加进 ``req.func_tool``（见 :meth:`_run_load_tools`）。
 
         为什么直接设 ``tool.active = False`` 而不是调框架的
-        ``deactivate_llm_tool_async``：与 :meth:`_deactivate_legacy_tools` 同一个
+        ``deactivate_llm_tool_async``：与独立工具停用逻辑同一个
         理由 —— 后者会把这个名字写进**持久化**的 ``inactivated_llm_tools``
         （全局 SharedPreferences）。这里的"不注册"是本插件的一项可关闭配置，
         不该在全局配置里留下永久痕迹（用户改回 false、甚至卸载重装之后，
@@ -722,7 +722,7 @@ class BskBrowserPlugin(Star):
         当轮加进去是为了"要用时能用"。
 
         Note:
-            与旧工具开关一样，本方法只在插件加载时执行一次，改配置需要重新
+            与其它可配置工具开关一样，本方法只在插件加载时执行一次，改配置需要重新
             加载插件；用户若在 AstrBot WebUI 的「扩展 → 组件」里手动改过
             ``bsk_debug`` 的开关，那一项会在本方法之后被 ``star_manager``
             重新计算，因此**优先**于本项。
@@ -845,7 +845,7 @@ class BskBrowserPlugin(Star):
 
         1. 总开关：``enabled=False`` → 拒绝（与其它工具一致）。
         2. 独立开关：``enable_evaluate=False`` → 拒绝。默认就走这条路径。
-           刻意不与 ``bsk_act`` 之类共用开关：升级插件不该凭空多出一个
+           刻意不与其它工具共用开关：升级插件不该凭空多出一个
            高危能力，用户必须显式去配置里打开它。
         3. 强制管理员：``evaluate_require_admin=True`` 且调用者不是管理员
            → 拒绝，即使 ``admin_only=False`` 也一样。
@@ -1573,11 +1573,11 @@ class BskBrowserPlugin(Star):
     async def _run_logs(
         self, key: str, kind: str, args: dict, *, include_stack: bool
     ) -> str:
-        """console / network 两个分支，共用 ``bsk_logs`` 那套游标与渲染。
+        """console / network 两个分支的游标与渲染。
 
         复用既有实现（TOOL-SPEC H4）：``_next_since`` 的游标推进规则、
         ``LOGS_RENDER_LIMIT`` 的展示上限、``render_console`` 的双重截断，
-        全部走旧工具同一条路径，新工具只多做一次参数传递。
+        新工具只多做一次参数传递。
         """
         cursor = int(args.get("since") or 0)
         label = LOGS_LABELS[kind]
@@ -1602,7 +1602,7 @@ class BskBrowserPlugin(Star):
 
     @staticmethod
     def _render_logs(label: str, cursor: int, log: ConsoleLog) -> str:
-        """渲染日志结果（与 ``bsk_logs`` 同一套文案与游标约定）。"""
+        """渲染日志结果（统一的文案与游标约定）。"""
         next_cursor = _next_since(cursor, log)
         if not log.entries:
             return (
@@ -2171,9 +2171,9 @@ class BskBrowserPlugin(Star):
         （兼容保留。本插件独有的能力，新工具里**没有**对应替代
         —— 它是超出 BrowserSkill 的部分，请继续用本工具。）
         这是高风险能力，默认关闭，且默认仅管理员可用（两项都在插件配置里，
-        需要管理员先去打开）。只在 bsk_read 读不到需要的东西时才用它，例如：
+        需要管理员先去打开）。只在 bsk_inspect 读不到需要的东西时才用它，例如：
         - 读取页面上没有直接显示的数据（元素属性、输入框里已有的内容）；
-        - 精确取出某个元素的文字，而不是靠 bsk_read 的摘要。
+        - 精确取出某个元素的文字，而不是靠 bsk_inspect 的摘要。
 
         脚本在用户已登录的页面里运行，因此它能接触到页面上的全部内容。
         返回文本过长时会被截断，需要完整内容时请在表达式里先做筛选。

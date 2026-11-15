@@ -728,7 +728,7 @@ class BskService:
             observation.text = (
                 "（注意：浏览器会话刚刚因空闲过久被回收并自动重建，"
                 "当前是新开的空白页，之前打开的网页和填过的内容已经丢失。"
-                "如果用户之前在浏览某个页面，需要重新用 bsk_open 打开那个网址。）\n"
+                "如果用户之前在浏览某个页面，需要重新用 bsk_page(action='navigate', url=...) 打开那个网址。）\n"
                 + observation.text
             )
             self._logger.info("会话 %s 在读取时被重建，已在返回内容里标注页面已重置", key)
@@ -1908,7 +1908,7 @@ class BskService:
             observation.text = (
                 "（注意：浏览器会话刚刚因空闲过久被回收并自动重建，"
                 "当前是新开的空白页，之前打开的网页和填过的内容已经丢失。"
-                "如果用户之前在浏览某个页面，需要重新用 bsk_open 打开那个网址。）\n"
+                "如果用户之前在浏览某个页面，需要重新用 bsk_page(action='navigate', url=...) 打开那个网址。）\n"
                 + observation.text
             )
             self._logger.info("会话 %s 在同步时被重建，已在返回内容里标注页面已重置", key)
@@ -2981,7 +2981,7 @@ class BskService:
             而 ``press`` 的 ref 是 ``--ref``，见下）。
         """
         # 兼容两种写法：新工具（bsk_interact）用连字符的 "scroll-to"（对齐 DSH
-        # 与 bsk CLI 的子命令名），旧工具（bsk_act）用下划线的 "scroll_to"。
+        # 与 bsk CLI 的子命令名），以及兼容下划线的 "scroll_to"。
         # 归一化放在这一处，两条路径都能用，也避免将来再出现"键对不上"的静默失败。
         # 注意方向：表的键是**连字符**形式，所以要把下划线换成连字符。
         spec = INTERACT_SPECS.get(action) or INTERACT_SPECS.get(

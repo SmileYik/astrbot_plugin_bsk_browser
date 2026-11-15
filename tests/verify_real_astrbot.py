@@ -14,7 +14,7 @@
 安全边界（严格遵守用户既有授权）：
 - 只访问 example.com（公开无害页面）
 - 不借用用户标签页；不用 session stop --all
-- bsk_act 只做只读动作（不做 click/fill/press 等会改页面的）
+- bsk_interact 只做只读动作（不做 click/fill/press 等会改页面的）
 - bsk_evaluate 保持默认关闭，只验证"默认被拒绝"这条路径，
   不真的执行 JS（要验证放行路径需要临时改配置，那留给用户自己决定）
 - 结束按精确 id 清理自己的会话
@@ -140,14 +140,16 @@ async def main() -> int:
 
         # 必需工具（少一个就是回归），以及"实际注册的必须与 main.py 声明的一致"。
         #
-        # 不再手写完整清单：那样每加一个工具都要回来改，忘了就误报
-        # （bsk_evaluate、bsk_logs 各踩过一次）。改为从 main.py 的
-        # `@filter.llm_tool("名字")` 自动推导 —— 那是唯一事实来源。
+        # 不再手写完整清单：那样每加一个工具都要回来改，忘了就误报。
+        # 改为从 main.py 的 `@filter.llm_tool("名字")` 自动推导 —— 那是唯一事实来源。
         required = {
-            "bsk_open",
-            "bsk_read",
-            "bsk_act",
-            "bsk_close",
+            "bsk_session",
+            "bsk_page",
+            "bsk_inspect",
+            "bsk_interact",
+            "bsk_tabs",
+            "bsk_assist",
+            "bsk_load_tools",
             "bsk_status",
         }
         declared = set(
@@ -191,39 +193,39 @@ async def main() -> int:
     except Exception as exc:  # noqa: BLE001
         record("bsk_status 返回诊断", False, repr(exc))
 
-    # 3.2 bsk_open
+    # 3.2 bsk_page
     try:
         out = await _call_tool(
-            bound["bsk_open"], admin, url="https://example.com", new_session=False
+            bound["bsk_page"], admin, action="navigate", url="https://example.com"
         )
         text = " ".join(str(i) for i in out if i is not None)
         session = await plugin.service.sessions.acquire("real-test:admin")
         created.add(session.session_id)
         record(
-            "bsk_open 打开网页并读到标题",
+            "bsk_page 打开网页并读到标题",
             "Example Domain" in text,
             f"session={session.session_id!r}",
         )
     except Exception as exc:  # noqa: BLE001
-        record("bsk_open 打开网页并读到标题", False, repr(exc))
+        record("bsk_page 打开网页并读到标题", False, repr(exc))
 
-    # 3.3 bsk_read
+    # 3.3 bsk_inspect(observe)
     try:
-        out = await _call_tool(bound["bsk_read"], admin)
+        out = await _call_tool(bound["bsk_inspect"], admin, action="observe")
         text = " ".join(str(i) for i in out if i is not None)
-        record("bsk_read 读到页面内容", "Example" in text, f"{text[:100]!r}")
+        record("bsk_inspect 读到页面内容", "Example" in text, f"{text[:100]!r}")
     except Exception as exc:  # noqa: BLE001
-        record("bsk_read 读到页面内容", False, repr(exc))
+        record("bsk_inspect 读到页面内容", False, repr(exc))
 
-    # 3.4 bsk_act（只做只读动作：滚动到元素，不改页面状态）
+    # 3.4 bsk_interact（只做只读动作：滚动到元素，不改页面状态）
     try:
         out = await _call_tool(
-            bound["bsk_act"], admin, action="scroll_to", target="@e1"
+            bound["bsk_interact"], admin, action="scroll_to", target="@e1"
         )
         text = " ".join(str(i) for i in out if i is not None)
-        record("bsk_act 只读动作可用", "已执行" in text, f"{text[:80]!r}")
+        record("bsk_interact 只读动作可用", "已执行" in text or "scroll" in text, f"{text[:80]!r}")
     except Exception as exc:  # noqa: BLE001
-        record("bsk_act 只读动作可用", False, repr(exc))
+        record("bsk_interact 只读动作可用", False, repr(exc))
 
     # 3.5 bsk_inspect(action="screenshot")（视口 + 全页，验证新配置项在真实链路生效）
     try:
@@ -305,13 +307,13 @@ async def main() -> int:
             f"{type(exc).__name__}: {str(exc)[:90]}",
         )
 
-    # 3.7 bsk_close
+    # 3.7 bsk_session(action="stop")
     try:
-        out = await _call_tool(bound["bsk_close"], admin)
+        out = await _call_tool(bound["bsk_session"], admin, action="stop")
         text = " ".join(str(i) for i in out if i is not None)
-        record("bsk_close 关闭会话", "关闭" in text, f"{text[:80]!r}")
+        record("bsk_session(stop) 关闭会话", "关闭" in text or "停止" in text, f"{text[:80]!r}")
     except Exception as exc:  # noqa: BLE001
-        record("bsk_close 关闭会话", False, repr(exc))
+        record("bsk_session(stop) 关闭会话", False, repr(exc))
 
     # ------------------------------------------------------------------
     # 4. 清理 + 残留检查

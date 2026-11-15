@@ -250,7 +250,7 @@ async def run() -> int:
         )
 
         # 先验证前提：白名单确实让这个非管理员通过了普通权限门
-        # （否则这条用例就没在测"盖过白名单"）。用 bsk_read 的门来对照。
+        # （否则这条用例就没在测"盖过白名单"）。用普通权限门来对照。
         ordinary_denied = plugin._denied(nonadmin)
         record(
             "2b.0 前提：白名单让该非管理员通过普通权限门（_denied 返回 None）",
@@ -411,7 +411,7 @@ async def run() -> int:
         record("边界", False, traceback.format_exc())
 
     # ---------------------------------------------------------------
-    print("\n--- 静态检查：evaluate 必须是独立工具，且没混进 bsk_act ---")
+    print("\n--- 静态检查：evaluate 必须是独立工具，且没混进交互工具动作 ---")
     # ---------------------------------------------------------------
     try:
         from astrbot_plugin_bsk_browser.bsk.errors import BskError
@@ -422,7 +422,7 @@ async def run() -> int:
             delta_y=0, delta_x=0,
         )
         record(
-            "6.1 bsk_act 的动作参数里没有 evaluate",
+            "6.1 交互工具的动作参数里没有 evaluate",
             "evaluate" not in act_args,
             f"argv={act_args}",
         )
@@ -433,10 +433,10 @@ async def run() -> int:
                 "evaluate", target="", value="", values=None, key_spec="",
                 delta_y=0, delta_x=0,
             )
-            record("6.2 bsk_act 不接受 evaluate 动作", False, "居然没报错")
+            record("6.2 交互工具不接受 evaluate 动作", False, "居然没报错")
         except BskError:
             record(
-                "6.2 bsk_act 不接受 evaluate 动作",
+                "6.2 交互工具不接受 evaluate 动作",
                 True,
                 "抛 BskError（不支持的动作）",
             )

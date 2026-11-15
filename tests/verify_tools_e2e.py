@@ -1,16 +1,15 @@
 """L4 工具层端到端测试：直接 await/consume 本脚本覆盖的工具函数 ——
-core 组的 ``bsk_close`` / ``bsk_status``，
-fringe 组的 ``bsk_open`` / ``bsk_read`` / ``bsk_act``，
+包括 ``bsk_session``、``bsk_page``、``bsk_interact``、``bsk_status``，
 以及支持截图的 ``bsk_inspect(action="screenshot")``。
 
 ## 这一层补的是什么缺口
 
 ``main.py`` 里的每个 ``@filter.llm_tool`` 函数内部都有自己的一段逻辑：
 参数校验、权限门、URL 协议白名单、异常包装、``bsk_inspect(action="screenshot")`` 的 async generator
-行为、``bsk_act`` 的动作名归一化。既有的三层测试都不覆盖它：
+行为。既有的三层测试都不覆盖它：
 
 - L1（``tests/test_*.py``）只测 ``bsk/`` 纯逻辑，用假 runner；
-- L2（``tests/verify_astrbot_contract.py``）只证明 16 个工具全部注册成功
+- L2（``tests/verify_astrbot_contract.py``）只证明工具全部注册成功
   （清单从 ``main.py`` 的 ``@filter.llm_tool`` 自动推导）、
   docstring schema 正确、生命周期方法可调用，没有调用过工具函数本身；
 - L3（``tests/verify_integration.py``）测的是 ``BskService`` 服务层，
@@ -32,7 +31,7 @@ fringe 组的 ``bsk_open`` / ``bsk_read`` / ``bsk_act``，
 - 只访问 ``https://example.com``，以及第 6 组用例里那个按 RFC 6761 保留、
   永不解析的 ``.invalid`` 域名；
 - 只用插件自己开的 Agent Window，绝不借用（borrow）用户的标签页；
-- 不做 click / fill / press / upload / download / evaluate（``bsk_act`` 只做只读的
+- 不做 click / fill / press / upload / download / evaluate（``bsk_interact`` 只做只读的
   ``scroll_to``）；
 - 绝不使用 ``bsk session stop --all``，只按精确 session id 停；
 - 结束时关闭本测试创建的所有会话；断言只比对"本测试创建的 session id 是否还在
@@ -402,9 +401,9 @@ async def group_permission() -> None:
     # --- 1.1 默认 admin_only=True，非管理员被拒绝 ---
     inst = make_plugin(base_config())
     denied, exc = await call(
-        inst.bsk_open, FakeEvent(is_admin=False, sender_id="10001", umo=UMO_BROWSER), url=URL_OK
+        inst.bsk_page, FakeEvent(is_admin=False, sender_id="10001", umo=UMO_BROWSER), action="navigate", url=URL_OK
     )
-    check_str_result("1.1 非管理员调用 bsk_open 被拒绝", denied, exc, ("仅限管理员",))
+    check_str_result("1.1 非管理员调用 bsk_page 被拒绝", denied, exc, ("仅限管理员",))
 
     # --- 1.2 拒绝时没有真的打开浏览器（daemon 会话清单前后对比）---
     after = await daemon_session_ids()
@@ -418,9 +417,9 @@ async def group_permission() -> None:
     # 这里故意用一个"必然在权限门之后才失败"的输入（空网址）来证明已经过了权限门：
     # 空网址的提示文案与权限拒绝文案完全不同，能明确区分"被拒"与"放行"。
     text, exc = await call(
-        inst.bsk_open, FakeEvent(is_admin=True, sender_id="10001", umo=UMO_BROWSER), url=""
+        inst.bsk_page, FakeEvent(is_admin=True, sender_id="10001", umo=UMO_BROWSER), action="navigate", url=""
     )
-    ok = check_str_result("1.3 管理员通过权限门", text, exc, ("请提供要打开的网址",))
+    ok = check_str_result("1.3 管理员通过权限门", text, exc, ("url",))
     if ok and "仅限管理员" in text:
         record("1.3b 放行判定未与拒绝文案混淆", False, "同时出现了权限拒绝文案")
     elif ok:
@@ -429,7 +428,7 @@ async def group_permission() -> None:
     # --- 1.4 admin_only=False：非管理员放行（真实打开一次，证明端到端通过）---
     inst_open = make_plugin(base_config(admin_only=False))
     ev_nonadmin = FakeEvent(is_admin=False, sender_id="10002", umo=UMO_NONADMIN)
-    text, exc = await call(inst_open.bsk_open, ev_nonadmin, url=URL_OK)
+    text, exc = await call(inst_open.bsk_page, ev_nonadmin, action="navigate", url=URL_OK)
     check_str_result(
         "1.4 admin_only=False 时非管理员可真实打开网页",
         text,
@@ -441,14 +440,14 @@ async def group_permission() -> None:
     inst_wl = make_plugin(base_config(admin_only=True, allowed_users=("1",)))
     # 同一种输入（空网址），只有 sender_id 不同 → 返回文案必须不同，才能证明是白名单在起作用。
     allowed, exc_a = await call(
-        inst_wl.bsk_open, FakeEvent(is_admin=False, sender_id="1", umo=UMO_BROWSER), url=""
+        inst_wl.bsk_page, FakeEvent(is_admin=False, sender_id="1", umo=UMO_BROWSER), action="navigate", url=""
     )
     blocked, exc_b = await call(
-        inst_wl.bsk_open, FakeEvent(is_admin=False, sender_id="2", umo=UMO_BROWSER), url=""
+        inst_wl.bsk_page, FakeEvent(is_admin=False, sender_id="2", umo=UMO_BROWSER), action="navigate", url=""
     )
     record(
         "1.5 白名单内用户（sender_id=1）放行",
-        exc_a is None and isinstance(allowed, str) and "请提供要打开的网址" in allowed,
+        exc_a is None and isinstance(allowed, str) and "url" in allowed,
         f"{(allowed if isinstance(allowed, str) else exc_a)!r}"[:120],
     )
     check_str_result("1.6 白名单外用户（sender_id=2）被拒绝", blocked, exc_b, ("白名单",))
@@ -491,7 +490,7 @@ async def group_permission() -> None:
     )
 
     # 收尾：把 1.4 打开的那个会话关掉，不留到后面（只按 key 精确关闭）。
-    await call(inst_open.bsk_close, ev_nonadmin)
+    await call(inst_open.bsk_session, ev_nonadmin, action="stop")
 
 
 # ---------------------------------------------------------------------------
@@ -507,39 +506,39 @@ async def group_validation() -> None:
     started_before = started_count(inst)
 
     # 2.1 空网址
-    text, exc = await call(inst.bsk_open, admin, url="")
-    check_str_result("2.1 bsk_open(url='') 拒绝并提示要提供网址", text, exc, ("请提供要打开的网址",))
+    text, exc = await call(inst.bsk_page, admin, action="navigate", url="")
+    check_str_result("2.1 bsk_page(action=navigate, url='') 拒绝并提示要提供网址", text, exc, ("url",))
 
     # 2.2 协议不对
-    text, exc = await call(inst.bsk_open, admin, url="ftp://x")
+    text, exc = await call(inst.bsk_page, admin, action="navigate", url="ftp://x")
     check_str_result(
-        "2.2 bsk_open(url='ftp://x') 拒绝并说明必须 http(s)",
+        "2.2 bsk_page(url='ftp://x') 拒绝并说明必须 http(s)",
         text,
         exc,
         ("http://", "https://"),
     )
 
     # 2.3 缺协议
-    text, exc = await call(inst.bsk_open, admin, url="example.com")
+    text, exc = await call(inst.bsk_page, admin, action="navigate", url="example.com")
     check_str_result(
-        "2.3 bsk_open(url='example.com') 缺协议被拒绝",
+        "2.3 bsk_page(url='example.com') 缺协议被拒绝",
         text,
         exc,
         ("http://", "https://"),
     )
 
     # 2.4 click 缺 target
-    text, exc = await call(inst.bsk_act, admin, action="click")
-    check_str_result("2.4 bsk_act(click) 缺 target 返回可读错误", text, exc, ("操作失败", "点击"))
+    text, exc = await call(inst.bsk_interact, admin, action="click")
+    check_str_result("2.4 bsk_interact(click) 缺 target 返回可读错误", text, exc, ("target",))
 
     # 2.5 press 缺 key_spec
-    text, exc = await call(inst.bsk_act, admin, action="press")
-    check_str_result("2.5 bsk_act(press) 缺 key_spec 返回可读错误", text, exc, ("操作失败", "键"))
+    text, exc = await call(inst.bsk_interact, admin, action="press")
+    check_str_result("2.5 bsk_interact(press) 缺 key_spec 返回可读错误", text, exc, ("key_spec",))
 
     # 2.6 非法动作名
-    text, exc = await call(inst.bsk_act, admin, action="not_a_real_action")
+    text, exc = await call(inst.bsk_interact, admin, action="not_a_real_action")
     ok = check_str_result(
-        "2.6 bsk_act(非法动作) 返回不支持并列出可用动作",
+        "2.6 bsk_interact(非法动作) 返回不支持并列出可用动作",
         text,
         exc,
         ("不支持的动作", "click", "scroll_to"),
@@ -548,8 +547,8 @@ async def group_validation() -> None:
         note(f"可用动作清单：{text[:150]}")
 
     # 2.7 select 缺 value
-    text, exc = await call(inst.bsk_act, admin, action="select", target="@e1")
-    check_str_result("2.7 bsk_act(select) 缺 value 返回可读错误", text, exc, ("操作失败", "选项"))
+    text, exc = await call(inst.bsk_interact, admin, action="select", target="@e1")
+    check_str_result("2.7 bsk_interact(select) 缺 value 返回可读错误", text, exc, ("value",))
 
     # 2.8 参数校验失败不能顺手开一个浏览器会话
     started_after = started_count(inst)
@@ -572,18 +571,19 @@ async def group_real_browser() -> None:
     admin = FakeEvent(is_admin=True, sender_id="10001", umo=UMO_BROWSER)
 
     # 3.1 打开网页
-    text, exc = await call(inst.bsk_open, admin, url=URL_OK)
-    check_str_result("3.1 bsk_open 打开 example.com", text, exc, ("已打开：", "Example Domain"))
+    text, exc = await call(inst.bsk_page, admin, action="navigate", url=URL_OK)
+    check_str_result("3.1 bsk_page 打开 example.com", text, exc, ("已打开：", "Example Domain"))
     sid = session_id_for(inst, UMO_BROWSER)
     note(f"本次会话 session_id={sid or '(未建立)'}")
 
     # 3.2 读取页面
-    text, exc = await call(inst.bsk_read, admin)
-    ok = check_str_result("3.2 bsk_read 返回页面摘要含标题", text, exc, ("Example Domain",))
+    items_read, exc_read = await consume(inst.bsk_inspect(admin, action="observe"))
+    text = " ".join(str(i) for i in items_read if i is not None)
+    ok = check_str_result("3.2 bsk_inspect(observe) 返回页面摘要含标题", text, exc_read, ("Example Domain",))
     if ok:
         refs = re.findall(r"@e\d+", text)
         record(
-            "3.3 bsk_read 返回可用的元素引用（@eN）",
+            "3.3 bsk_inspect(observe) 返回可用的元素引用（@eN）",
             bool(refs),
             f"引用={refs[:8]}" if refs else f"没找到 @eN；返回：{text[:200]!r}",
         )
@@ -626,8 +626,8 @@ async def group_real_browser() -> None:
             )
 
     # 3.8 只读动作：scroll_to @e1
-    text, exc = await call(inst.bsk_act, admin, action="scroll_to", target="@e1")
-    check_str_result("3.8 bsk_act(scroll_to @e1) 执行成功", text, exc, ("已执行 scroll_to",))
+    text, exc = await call(inst.bsk_interact, admin, action="scroll_to", target="@e1")
+    check_str_result("3.8 bsk_interact(scroll_to @e1) 执行成功", text, exc, ("已执行 scroll_to",))
 
     # 3.9 诊断信息
     text, exc = await call(inst.bsk_status, admin)
@@ -640,13 +640,13 @@ async def group_real_browser() -> None:
         )
 
     # 3.11 关闭会话
-    text, exc = await call(inst.bsk_close, admin)
-    check_str_result("3.11 bsk_close 关闭会话", text, exc, ("已关闭浏览器会话",))
+    text, exc = await call(inst.bsk_session, admin, action="stop")
+    check_str_result("3.11 bsk_session 关闭会话", text, exc, ("已关闭浏览器会话",))
 
     # 3.12 再关一次
-    text, exc = await call(inst.bsk_close, admin)
+    text, exc = await call(inst.bsk_session, admin, action="stop")
     check_str_result(
-        "3.12 重复 bsk_close 返回没有正在使用的会话",
+        "3.12 重复 bsk_session 返回没有正在使用的会话",
         text,
         exc,
         ("当前没有正在使用的浏览器会话",),
@@ -666,11 +666,11 @@ async def group_isolation() -> None:
     ev_b2 = FakeEvent(is_admin=True, sender_id="20002", umo=UMO_ISO_B)
     ev_c = FakeEvent(is_admin=True, sender_id="20003", umo=UMO_ISO_C)
 
-    text_b1, exc_b1 = await call(inst.bsk_open, ev_b1, url=URL_OK)
+    text_b1, exc_b1 = await call(inst.bsk_page, ev_b1, action="navigate", url=URL_OK)
     sid_b1 = session_id_for(inst, UMO_ISO_B)
-    text_b2, exc_b2 = await call(inst.bsk_open, ev_b2, url=URL_OK)
+    text_b2, exc_b2 = await call(inst.bsk_page, ev_b2, action="navigate", url=URL_OK)
     sid_b2 = session_id_for(inst, UMO_ISO_B)
-    text_c, exc_c = await call(inst.bsk_open, ev_c, url=URL_OK)
+    text_c, exc_c = await call(inst.bsk_page, ev_c, action="navigate", url=URL_OK)
     sid_c = session_id_for(inst, UMO_ISO_C)
 
     if exc_b1 or exc_b2 or exc_c:
@@ -689,7 +689,7 @@ async def group_isolation() -> None:
         f"umo_B → {sid_b1!r}，umo_C → {sid_c!r}（必须不同）",
     )
     record(
-        "4.3 同一 umo 的两次 bsk_open 复用同一个会话",
+        "4.3 同一 umo 的两次 bsk_page 复用同一个会话",
         bool(sid_b1) and sid_b1 == sid_b2,
         f"第一次 {sid_b1!r}，第二次 {sid_b2!r}（必须相同）",
     )
@@ -711,8 +711,8 @@ async def group_isolation() -> None:
     )
 
     # 收尾：只关本组自己的两个 key（精确 id，不用 --all）
-    await call(inst.bsk_close, ev_b1)
-    text, exc = await call(inst.bsk_close, ev_c)
+    await call(inst.bsk_session, ev_b1, action="stop")
+    text, exc = await call(inst.bsk_session, ev_c, action="stop")
     record(
         "4.6 本组会话已按 key 精确关闭",
         exc is None and isinstance(text, str) and "已关闭浏览器会话" in text,
@@ -732,7 +732,7 @@ async def group_error_wrapping() -> None:
     admin = FakeEvent(is_admin=True, sender_id="10001", umo=UMO_DEAD)
 
     started = time.monotonic()
-    text, exc = await call(inst.bsk_open, admin, url=URL_DEAD)
+    text, exc = await call(inst.bsk_page, admin, action="navigate", url=URL_DEAD)
     elapsed = time.monotonic() - started
 
     if exc is not None:
@@ -789,7 +789,7 @@ async def group_image_failure_fallback() -> None:
     inst = make_plugin(base_config())
     ev = BrokenImageEvent(is_admin=True, sender_id="10001", umo=UMO_BROKEN_IMG)
 
-    text, exc = await call(inst.bsk_open, ev, url=URL_OK)
+    text, exc = await call(inst.bsk_page, ev, action="navigate", url=URL_OK)
     if exc is not None or not isinstance(text, str) or "Example Domain" not in text:
         record(
             "6.1 降级用例的前置打开成功",

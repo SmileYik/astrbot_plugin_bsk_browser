@@ -39,7 +39,7 @@ class TestServiceSync(unittest.IsolatedAsyncioTestCase):
         self.assertIn("--tab-id", argv)
         self.assertIn("1", argv)
 
-    async def test_open_session_calls_bsk_open(self) -> None:
+    async def test_open_session_calls_service_open(self) -> None:
         service = BskService.__new__(BskService)
         service._resolve_key = MagicMock(return_value="s1")
         service._timeout = lambda builtin: builtin

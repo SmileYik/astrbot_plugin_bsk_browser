@@ -186,16 +186,20 @@ print("__RESULT__" + json.dumps(out, ensure_ascii=False))
         check("干净副本可加载", True, "")
         # 必须存在的工具（少一个就是回归）。
         required = {
-            "bsk_open",
-            "bsk_read",
-            "bsk_act",
-            "bsk_close",
+            "bsk_session",
+            "bsk_page",
+            "bsk_inspect",
+            "bsk_debug",
+            "bsk_load_tools",
+            "bsk_interact",
+            "bsk_tabs",
+            "bsk_assist",
             "bsk_status",
         }
         actual = set(c["tools"])
 
         check(
-            "5 个必需工具全部注册",
+            "主工具与自检工具全部注册",
             required.issubset(actual),
             f"缺少：{sorted(required - actual)}" if not required.issubset(actual) else f"实际：{sorted(actual)}",
         )
@@ -203,7 +207,7 @@ print("__RESULT__" + json.dumps(out, ensure_ascii=False))
         # 「不得出现意料之外的工具名」这条，改成**从源码自动推导**白名单。
         #
         # 为什么不再手写 allowed 集合：手写的话每加一个工具都要回来改一次，
-        # 忘了改就把正常的功能演进报成回归（bsk_evaluate、bsk_logs 各踩过一次）。
+        # 忘了改就把正常的功能演进报成回归。
         # 现在改为扫描 main.py 里所有 `@filter.llm_tool("名字")` 的字面量 ——
         # 那才是"这个插件声明了哪些工具"的唯一事实来源。
         #

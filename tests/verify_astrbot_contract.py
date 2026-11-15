@@ -142,9 +142,7 @@ def main() -> int:
 
         names = {t.name for t in llm_tools.func_list}
 
-        # 不手写工具清单：那样每加一个工具都要回来改，忘了就漏检 ——
-        # bsk_evaluate、bsk_logs 就是这么从这份清单里漏掉的（清单停在 6 个，
-        # 而 main.py 已有 8 个，检查名却还写着"6 个工具全部注册"）。
+        # 新增工具很容易从固定清单里漏掉。
         # 改为从 main.py 的 `@filter.llm_tool("名字")` 自动推导 —— 唯一事实来源。
         # 同 verify_real_astrbot.py 的做法。
         expected = set(

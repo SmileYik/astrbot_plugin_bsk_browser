@@ -1,7 +1,7 @@
 """真实调用链验证：走 AstrBot 自己的工具执行器，而不是直接调函数。
 
 ## 与已有测试的区别
-`verify_tools_e2e.py` 是直接 await 工具函数（`plugin.bsk_read(event)`）。
+`verify_tools_e2e.py` 是直接 await 工具函数（`plugin.bsk_page(event, action="navigate")`）。
 但那不是生产路径 —— 真实调用要经过 AstrBot 的工具执行层，它会：
 
 1. 用 ``functools.partial`` 把插件实例绑上去（``star_manager.py:1300``）；
@@ -94,14 +94,14 @@ async def main() -> int:
         bound[tool.name] = functools.partial(fn, plugin)
 
     expected = {
-        "bsk_open",
-        "bsk_read",
-        "bsk_act",
-        "bsk_close",
+        "bsk_page",
+        "bsk_inspect",
+        "bsk_interact",
+        "bsk_session",
         "bsk_status",
     }
     check(
-        "5 个工具都拿到了可调用句柄",
+        "核心工具都拿到了可调用句柄",
         expected.issubset(set(bound)),
         f"拿到：{sorted(bound)}",
     )
@@ -122,15 +122,15 @@ async def main() -> int:
         context=types.SimpleNamespace(event=stranger)
     )
 
-    handler = bound["bsk_open"]
+    handler = bound["bsk_page"]
     collected: list[object] = []
     try:
         gen = call_local_llm_tool(
             context=wrapper_ctx,
             handler=handler,
             method_name="decorator_handler",
+            action="navigate",
             url="https://example.com",
-            new_session=False,
         )
         async for item in gen:
             collected.append(item)
@@ -164,8 +164,8 @@ async def main() -> int:
     wrapper_ctx2 = types.SimpleNamespace(context=types.SimpleNamespace(event=admin))
 
     for tool_name, kwargs, expect_kw in (
-        ("bsk_open", {"url": "ftp://x", "new_session": False}, "http"),
-        ("bsk_act", {"action": "click", "target": ""}, "元素"),
+        ("bsk_page", {"action": "navigate", "url": "ftp://x"}, "http"),
+        ("bsk_interact", {"action": "click", "target": ""}, "target"),
     ):
         collected2: list[object] = []
         try:

@@ -103,7 +103,7 @@ async def main() -> int:
     )
     await plugin.initialize()
 
-    out = await plugin.bsk_open(admin, url="https://example.com")
+    out = await plugin.bsk_page(admin, action="navigate", url="https://example.com")
     print(f"      返回：{out[:220]}")
     check("bsk 未安装时返回字符串（不抛异常）", isinstance(out, str), f"类型={type(out).__name__}")
     check("不是 Python 堆栈", not looks_like_stacktrace(out), "堆栈会暴露内部结构且用户看不懂")
@@ -114,16 +114,19 @@ async def main() -> int:
     check("bsk_status 也给出可操作提示", looks_actionable(out_status), "")
     check("bsk_status 不是堆栈", not looks_like_stacktrace(out_status), "")
 
-    out_read = await plugin.bsk_read(admin)
+    out_read = ""
+    async for item in plugin.bsk_inspect(admin, action="observe"):
+        out_read = str(item)
+        break
     check(
-        "bsk_read 同样优雅降级",
+        "bsk_inspect(observe) 同样优雅降级",
         isinstance(out_read, str) and not looks_like_stacktrace(out_read),
         f"{out_read[:120]}",
     )
 
-    out_close = await plugin.bsk_close(admin)
+    out_close = await plugin.bsk_session(admin, action="stop")
     check(
-        "bsk_close 不会因环境坏而崩",
+        "bsk_session(stop) 不会因环境坏而崩",
         isinstance(out_close, str) and not looks_like_stacktrace(out_close),
         f"{out_close[:120]}",
     )
@@ -138,7 +141,7 @@ async def main() -> int:
     await plugin2.initialize()
 
     stranger = FakeEvent(is_admin=False, sender_id="99999", umo="test:stranger")
-    out = await plugin2.bsk_open(stranger, url="https://example.com")
+    out = await plugin2.bsk_page(stranger, action="navigate", url="https://example.com")
     print(f"      返回：{out[:220]}")
     check("非管理员被拒绝", "管理员" in out or "权限" in out, f"{out[:120]}")
     check("拒绝提示说明怎么获得权限", "管理员" in out, "应告诉用户找管理员")
@@ -160,7 +163,7 @@ async def main() -> int:
 
     snap_before = await _safe_ids()
     # 再试一次被拒的调用，确认它仍然不创建会话
-    await plugin2.bsk_open(stranger, url="https://example.com")
+    await plugin2.bsk_page(stranger, action="navigate", url="https://example.com")
     snap_after = await _safe_ids()
     created = snap_after - snap_before
     check(
@@ -177,7 +180,7 @@ async def main() -> int:
     print("\n--- 场景 3：插件在配置里被停用 ---")
     plugin3 = await load_plugin({"enabled": False, "bsk_path": "bsk"})
     await plugin3.initialize()
-    out = await plugin3.bsk_open(admin, url="https://example.com")
+    out = await plugin3.bsk_page(admin, action="navigate", url="https://example.com")
     print(f"      返回：{out[:220]}")
     check("停用后拒绝执行", "停用" in out or "禁用" in out, f"{out[:120]}")
     check("停用提示不是堆栈", not looks_like_stacktrace(out), "")
@@ -206,16 +209,16 @@ async def main() -> int:
     )
 
     for url, desc in empty_cases:
-        out = await plugin4.bsk_open(admin, url=url)
+        out = await plugin4.bsk_page(admin, action="navigate", url=url)
         ok = (
             isinstance(out, str)
-            and "网址" in out
+            and ("网址" in out or "url" in out)
             and not looks_like_stacktrace(out)
         )
         check(f"拒绝 {desc}", ok, f"{out[:110]}")
 
     for url, desc in bad_scheme_cases:
-        out = await plugin4.bsk_open(admin, url=url)
+        out = await plugin4.bsk_page(admin, action="navigate", url=url)
         ok = (
             isinstance(out, str)
             and "http" in out
