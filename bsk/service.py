@@ -865,19 +865,69 @@ class BskService:
         Raises:
             BskError: 任何 bsk 层错误（含会话不确定态被拒）。
         """
-        args = self._build_action_args(
-            action,
-            target=target,
-            value=value,
-            values=values,
-            key_spec=key_spec,
-            delta_y=delta_y,
-            delta_x=delta_x,
-        )
-        result = await self.sessions.execute(
+        timeout = self._timeout(TIMEOUT_ACTION)
+        from .errors import BskError as _Err
+
+        if action == "click":
+            if not target:
+                raise _Err("click 需要 target", friendly="请提供要点击的元素编号（如 @e3）或 CSS 选择器。")
+            action_fn = lambda sid: self.cli.click(sid, target, timeout=timeout, raise_on_error=True)
+        elif action == "hover":
+            if not target:
+                raise _Err("hover 需要 target", friendly="请提供要悬停的元素编号或 CSS 选择器。")
+            action_fn = lambda sid: self.cli.hover(sid, target, timeout=timeout, raise_on_error=True)
+        elif action == "scroll_to":
+            if not target:
+                raise _Err("scroll_to 需要 target", friendly="请提供要滚动到的元素编号或 CSS 选择器。")
+            action_fn = lambda sid: self.cli.scroll_to(sid, target, timeout=timeout, raise_on_error=True)
+        elif action == "focus":
+            if not target:
+                raise _Err("focus 需要 target", friendly="请提供要聚焦的元素编号或 CSS 选择器。")
+            action_fn = lambda sid: self.cli.focus(sid, target, timeout=timeout, raise_on_error=True)
+        elif action == "blur":
+            if not target:
+                raise _Err("blur 需要 target", friendly="请提供要取消聚焦的元素编号或 CSS 选择器。")
+            action_fn = lambda sid: self.cli.blur(sid, target, timeout=timeout, raise_on_error=True)
+        elif action == "fill":
+            if not target:
+                raise _Err("fill 需要 target", friendly="请提供要输入的元素编号。")
+            action_fn = lambda sid: self.cli.fill(sid, target, value=value, timeout=timeout, raise_on_error=True)
+        elif action == "press":
+            if not key_spec:
+                raise _Err("press 需要 key", friendly="请提供要按下的键，例如 Enter、Escape、Ctrl+A。")
+            action_fn = lambda sid: self.cli.press(sid, key_spec, target=target or None, timeout=timeout, raise_on_error=True)
+        elif action == "select":
+            if not target:
+                raise _Err("select 需要 target", friendly="请提供下拉框的元素编号。")
+            vals = values if values else ([value] if value else [])
+            if not vals:
+                raise _Err("select 需要 value", friendly="请提供要选中的选项值。")
+            action_fn = lambda sid: self.cli.select(sid, target, values=vals, timeout=timeout, raise_on_error=True)
+        elif action == "wheel":
+            action_fn = lambda sid: self.cli.wheel(sid, delta_x=int(delta_x), delta_y=int(delta_y), timeout=timeout, raise_on_error=True)
+        elif action == "navigate_back":
+            action_fn = lambda sid: self.cli.navigate(sid, "back", timeout=timeout, raise_on_error=True)
+        elif action == "navigate_forward":
+            action_fn = lambda sid: self.cli.navigate(sid, "forward", timeout=timeout, raise_on_error=True)
+        elif action == "reload":
+            action_fn = lambda sid: self.cli.reload(sid, timeout=timeout, raise_on_error=True)
+        elif action == "wait_for_navigation":
+            action_fn = lambda sid: self.cli.wait_for_navigation(sid, timeout=timeout, raise_on_error=True)
+        else:
+            raise _Err(
+                f"不支持的动作：{action}",
+                friendly=(
+                    f"不支持的动作「{action}」。可用的有："
+                    "click / fill / press / select / hover / scroll_to / wheel / "
+                    "focus / blur / navigate_back / navigate_forward / reload / "
+                    "wait_for_navigation。"
+                ),
+            )
+
+        result = await self.sessions.execute_action(
             key,
-            lambda sid: [*args, "--session", sid, "--json"],
-            timeout=self._timeout(TIMEOUT_ACTION),
+            action_fn,
+            timeout=timeout,
             # 写类动作绝不允许在不确定态下执行 —— 那可能造成重复点击/重复提交。
             allow_uncertain=False,
         )
@@ -2118,49 +2168,7 @@ class BskService:
         """
         return key
 
-    # ------------------------------------------------------------------
-    # 新方法共用的三个小工具
-    # ------------------------------------------------------------------
 
-    @staticmethod
-    def _with_tab_id(args: list[str], tab_id: int | None) -> list[str]:
-        """把 ``--tab-id`` 追加到 argv 上。tab_id 为 None 时原样返回。
-
-        依据：DSH 的 ``appendTabId``（``phase-one-runtime.ts:47-49``）只在传了
-        ``tabId`` 时才追加 ``--tab-id``；未传 = Agent Window 的当前活动标签。
-
-        为什么单独一个辅助而不是每处手写：CLI 报告里 ``--tab-id`` 出现在十几条
-        子命令的选项表里（§7/§9/§10/§11/§12/§13/§14/§15/§16/§17/§20…），
-        十处各写一遍 trim/类型转换，迟早有一处写成 ``str(tab_id)`` 把
-        ``"@e3"`` 这种脏值原样发出去。这里统一收敛成整数。
-
-        Note:
-            位置无关：clap 不在意 ``--tab-id`` 与 ``--session``/``--json`` 的
-            先后。本文件统一把它放在命令自带参数之后、``--session`` 之前
-            （除 debug 外，那里为了不打断筛选参数的分组，放在最前）。
-        """
-        if tab_id is None:
-            return args
-        return [*args, *BskService._tab_args(tab_id)]
-
-    @staticmethod
-    def _tab_args(tab_id: int | None) -> list[str]:
-        """``--tab-id`` 参数（CLI 报告：几乎每条会话命令都有，且都可省略）。"""
-        if tab_id is None:
-            return []
-        return ["--tab-id", str(int(tab_id))]
-
-    def _size_args(self, width: int | None, height: int | None) -> list[str]:
-        """``--width`` / ``--height``：**必须同时给**，否则两个都不发。
-
-        依据：CLI 报告 §5（``session start``）"必须与 ``--height`` 同时给出
-        才生效"、§9（``emulate``）"无 ``--device`` 时要求同时给"。
-        只给一个时发出去只会被 bsk 忽略，却会让模型以为尺寸已生效 ——
-        那不是"容错"，是骗人。
-        """
-        if width is None or height is None:
-            return []
-        return ["--width", str(int(width)), "--height", str(int(height))]
 
     # ------------------------------------------------------------------
     # bsk_page：导航与等待
@@ -2513,18 +2521,20 @@ class BskService:
         ``--include-stack`` 只有 ``console`` 有（§14 明确 network 没有）。
         """
         session_key = self._resolve_key(key)
-        args: list[str] = ["--since", str(int(since))]
-        if limit is not None:
-            args += ["--limit", str(int(limit))]
-        if max_text_chars is not None:
-            args += ["--max-text-chars", str(int(max_text_chars))]
-        if include_stack:
-            args.append("--include-stack")
-        result = await self.sessions.execute(
+        timeout = self._timeout(TIMEOUT_QUICK)
+        result = await self.sessions.execute_action(
             session_key,
-            lambda sid: self._with_tab_id(["console", *args], tab_id)
-            + ["--session", sid, "--json"],
-            timeout=self._timeout(TIMEOUT_QUICK),
+            lambda sid: self.cli.read_console(
+                sid,
+                since=since,
+                limit=limit,
+                max_text_chars=max_text_chars,
+                include_stack=include_stack,
+                tab_id=tab_id,
+                timeout=timeout,
+                raise_on_error=True,
+            ),
+            timeout=timeout,
             allow_uncertain=True,
         )
         return ConsoleLog.from_json(result.data if isinstance(result.data, dict) else {})
@@ -2548,16 +2558,19 @@ class BskService:
         所以本方法也不接受这个参数。
         """
         session_key = self._resolve_key(key)
-        args: list[str] = ["--since", str(int(since))]
-        if limit is not None:
-            args += ["--limit", str(int(limit))]
-        if max_text_chars is not None:
-            args += ["--max-text-chars", str(int(max_text_chars))]
-        result = await self.sessions.execute(
+        timeout = self._timeout(TIMEOUT_QUICK)
+        result = await self.sessions.execute_action(
             session_key,
-            lambda sid: self._with_tab_id(["network", *args], tab_id)
-            + ["--session", sid, "--json"],
-            timeout=self._timeout(TIMEOUT_QUICK),
+            lambda sid: self.cli.read_network(
+                sid,
+                since=since,
+                limit=limit,
+                max_text_chars=max_text_chars,
+                tab_id=tab_id,
+                timeout=timeout,
+                raise_on_error=True,
+            ),
+            timeout=timeout,
             allow_uncertain=True,
         )
         return ConsoleLog.from_json(result.data if isinstance(result.data, dict) else {})
@@ -2618,21 +2631,8 @@ class BskService:
         session_key = self._resolve_key(key)
         action = str(debug_action)
 
-        args: list[str] = []
         explicit_tab_id = opts.pop("tab_id", None)
-        for name, flag in DEBUG_VALUE_FLAGS.items():
-            value = opts.get(name)
-            if value is None or value == "" or value is False:
-                continue
-            args += [flag, self._render_debug_value(name, value)]
-        for name, flag in DEBUG_BOOL_FLAGS.items():
-            if opts.get(name) is True:
-                args.append(flag)
-
-        tail: list[str] = []
-        id_arg = opts.get("id")
-        if id_arg is not None and id_arg != "":
-            tail.append(str(id_arg))
+        id_arg = opts.pop("id", None)
 
         readonly = action not in MUTATING_DEBUG_ACTIONS
         timeout = (
@@ -2641,24 +2641,17 @@ class BskService:
             else self._timeout(TIMEOUT_DEBUG)
         )
 
-        result = await self.sessions.execute(
+        result = await self.sessions.execute_action(
             session_key,
-            # --tab-id 放在最前面：DEBUG_VALUE_FLAGS 里它本来也会被渲染，
-            #   这里显式再传一次是为了让"只给 tab_id 关键字参数"也能生效；
-            #   两者同时给出时以关键字参数为准（上面的 pop 已把它从 opts 摘走，
-            #   所以不会出现两个 --tab-id）。
-            lambda sid: [
-                "debug",
-                *self._tab_args(
-                    int(explicit_tab_id) if explicit_tab_id is not None else None
-                ),
-                *args,
-                action,
-                *tail,
-                "--session",
+            lambda sid: self.cli.debug(
                 sid,
-                "--json",
-            ],
+                action,
+                id=str(id_arg) if id_arg is not None and id_arg != "" else None,
+                tab_id=int(explicit_tab_id) if explicit_tab_id is not None else None,
+                timeout=timeout,
+                raise_on_error=True,
+                **opts,
+            ),
             timeout=timeout,
             allow_uncertain=readonly,
         )
@@ -2779,28 +2772,41 @@ class BskService:
         ):
             opts["observation_id"] = self._session_observations.pop(session_key, None)
 
-        argv, readonly = self._build_interact_args(action, opts)
+        readonly = action in ("wheel", "scroll-to", "scroll_to", "focus", "blur")
+        timeout = self._timeout(self._interact_timeout_builtin(action))
         auto_scrolled = False
         auto_synced = False
 
         async def _run_action() -> Any:
-            return await self.sessions.execute(
+            return await self.sessions.execute_action(
                 session_key,
-                lambda sid: self._with_tab_id(argv, tab_id)
-                + ["--session", sid, "--json"],
-                timeout=self._timeout(self._interact_timeout_builtin(action)),
+                lambda sid: self.cli.interact(
+                    sid,
+                    action,
+                    tab_id=tab_id,
+                    timeout=timeout,
+                    raise_on_error=True,
+                    **opts,
+                ),
+                timeout=timeout,
                 # 写类动作（click/fill/press/select/hover）绝不允许在不确定态下执行
                 # —— 那可能造成重复点击、重复提交。
                 allow_uncertain=readonly,
             )
 
         async def _run_scroll() -> Any:
-            scroll_argv, scroll_readonly = self._build_interact_args("scroll-to", {"target": target})
-            return await self.sessions.execute(
+            scroll_timeout = self._timeout(self._interact_timeout_builtin("scroll-to"))
+            return await self.sessions.execute_action(
                 session_key,
-                lambda sid: self._with_tab_id(scroll_argv, tab_id) + ["--session", sid, "--json"],
-                timeout=self._timeout(self._interact_timeout_builtin("scroll-to")),
-                allow_uncertain=scroll_readonly,
+                lambda sid: self.cli.scroll_to(
+                    sid,
+                    target,
+                    tab_id=tab_id,
+                    timeout=scroll_timeout,
+                    raise_on_error=True,
+                ),
+                timeout=scroll_timeout,
+                allow_uncertain=True,
             )
 
         try:
@@ -2841,7 +2847,6 @@ class BskService:
                 if action in ("wheel", "press") and not target:
                     opts["observation_id"] = obs.observation_id
                     self._session_observations.pop(session_key, None)
-                    argv, readonly = self._build_interact_args(action, opts)
 
                 try:
                     result = await _run_action()
@@ -3065,107 +3070,6 @@ class BskService:
         del action
         return TIMEOUT_ACTION
 
-    @staticmethod
-    def _build_interact_args(action: str, opts: dict[str, Any]) -> tuple[list[str], bool]:
-        """把交互参数翻译成 bsk 命令行参数（不含 ``--session``）。
-
-        Returns:
-            ``(argv, readonly)``。``readonly=True`` 表示允许在会话不确定态下
-            执行（只有 ``wheel``/``scroll_to``/``focus``/``blur`` 这四种
-            "不改变页面数据"的动作）。
-
-        Raises:
-            BskError: 该 action **在 bsk CLI 里没有对应子命令**时。
-                绝不臆造参数（本次实现的硬约束）。
-
-        Note:
-            ``target`` 一律走**位置参数**，不发 ``--ref`` / ``--selector``：
-            CLI 报告 §21-§29 明确写了位置参数"使用 --ref/--selector 时可省略"，
-            即三选一。位置参数同时接受 ``@e3``/``e3``/CSS 选择器，交给 CLI
-            自己判别（TOOL-SPEC §1.4 的"唯一特例"只在 ``press`` 上，
-            而 ``press`` 的 ref 是 ``--ref``，见下）。
-        """
-        # 兼容两种写法：新工具（bsk_interact）用连字符的 "scroll-to"（对齐 DSH
-        # 与 bsk CLI 的子命令名），以及兼容下划线的 "scroll_to"。
-        # 归一化放在这一处，两条路径都能用，也避免将来再出现"键对不上"的静默失败。
-        # 注意方向：表的键是**连字符**形式，所以要把下划线换成连字符。
-        spec = INTERACT_SPECS.get(action) or INTERACT_SPECS.get(
-            action.replace("_", "-")
-        )
-        target = str(opts.get("target") or "")
-        if spec is None:
-            from .errors import BskError as _Err
-
-            raise _Err(
-                f"bsk CLI 没有对应 {action} 的子命令",
-                friendly=(
-                    f"「{action}」不是可用的交互动作；可选值："
-                    + " / ".join(INTERACT_SPECS)
-                    + "。"
-                ),
-                code="unsupported_action",
-            )
-
-        if spec.requires_target and not target:
-            from .errors import BskError as _Err
-
-            raise _Err(
-                f"{action} 需要 target",
-                friendly=(
-                    f"「{action}」必须指定要操作的元素："
-                    "给 target 传元素编号（如 @e3）或 CSS 选择器。"
-                ),
-                code="missing_target",
-            )
-
-        argv: list[str] = [spec.argv[0]]
-
-        # ID / KEY 这类"必填的位置参数"（press 的按键、tab 的 id）。
-        for placeholder in spec.leading_positionals:
-            value = opts.get(placeholder)
-            if value is None or value == "":
-                from .errors import BskError as _Err
-
-                raise _Err(
-                    f"{action} 缺少 {placeholder}",
-                    friendly=f"「{action}」必须提供 {placeholder} 参数。",
-                    code="missing_argument",
-                )
-            argv.append(str(value))
-
-        # 目标位置参数。
-        if spec.allows_target and target:
-            argv.append(target)
-
-        # 选项（顺序固定，便于测试与人工核对）。
-        for name, flag in spec.value_flags:
-            value = opts.get(name)
-            if value is None or value is False:
-                continue
-            if value == "" and (action, name) not in _EMPTY_VALUE_OK:
-                continue
-            if name == "values":
-                for item in value if isinstance(value, (list, tuple)) else [value]:
-                    argv += [flag, str(item)]
-                continue
-            if name == "modifiers":
-                argv += [flag, ",".join(str(m) for m in value)]
-                continue
-            if name == "click_count":
-                argv += [flag, str(int(value))]
-                continue
-            argv += [flag, str(value)]
-        for name, flag in spec.bool_flags:
-            if opts.get(name) is True:
-                argv.append(flag)
-        for name, flag in spec.ms_flags:
-            value = opts.get(name)
-            if value is None:
-                continue
-            argv += [flag, ServiceHelper.ms_value(value)]
-
-        return argv, spec.readonly
-
     # ------------------------------------------------------------------
     # bsk_tabs：标签管理
     # ------------------------------------------------------------------
@@ -3204,8 +3108,76 @@ class BskService:
             ``tab_id=`` 关键字参数的原因（那会把同一个名字指到两个东西上）。
         """
         session_key = self._resolve_key(key)
-        spec = TABS_SPECS.get(action)
-        if spec is None:
+        target_tab_id = tab_id if tab_id is not None else opts.get("tab_id")
+        timeout = self._timeout(TIMEOUT_ACTION)
+
+        if action == "close":
+            if target_tab_id is None or target_tab_id == "":
+                raise BskError(
+                    "tab close 需要 tab_id",
+                    friendly="「tab close」必须给出要操作的标签 id（先用 bsk_tabs(action=\"list\") 查看）。",
+                    code="missing_tab_id",
+                )
+            result = await self.sessions.close_tab_safe(
+                session_key,
+                int(target_tab_id),
+                timeout=timeout,
+                raise_on_error=True,
+            )
+        elif action == "list":
+            result = await self.sessions.execute_action(
+                session_key,
+                lambda sid: self.cli.list_tabs(
+                    sid,
+                    scope=opts.get("scope"),
+                    timeout=timeout,
+                    raise_on_error=True,
+                ),
+                timeout=timeout,
+                allow_uncertain=False,
+            )
+        elif action == "create":
+            result = await self.sessions.execute_action(
+                session_key,
+                lambda sid: self.cli.create_tab(
+                    sid,
+                    url=opts.get("url"),
+                    index=opts.get("index"),
+                    active=opts.get("active", True),
+                    timeout=timeout,
+                    raise_on_error=True,
+                ),
+                timeout=timeout,
+                allow_uncertain=False,
+            )
+        elif action == "select":
+            if target_tab_id is None or target_tab_id == "":
+                raise BskError("tab select 需要 tab_id", friendly="「tab select」必须给出要操作的标签 id。", code="missing_tab_id")
+            result = await self.sessions.execute_action(
+                session_key,
+                lambda sid: self.cli.select_tab(sid, int(target_tab_id), timeout=timeout, raise_on_error=True),
+                timeout=timeout,
+                allow_uncertain=False,
+            )
+        elif action == "borrow":
+            if target_tab_id is None or target_tab_id == "":
+                raise BskError("tab borrow 需要 tab_id", friendly="「tab borrow」必须给出要操作的标签 id。", code="missing_tab_id")
+            result = await self.sessions.execute_action(
+                session_key,
+                lambda sid: self.cli.borrow_tab(sid, int(target_tab_id), timeout=timeout, raise_on_error=True),
+                timeout=timeout,
+                allow_uncertain=False,
+            )
+        elif action == "return":
+            if target_tab_id is None or target_tab_id == "":
+                raise BskError("tab return 需要 tab_id", friendly="「tab return」必须给出要操作的标签 id。", code="missing_tab_id")
+            result = await self.sessions.execute_action(
+                session_key,
+                lambda sid: self.cli.return_tab(sid, int(target_tab_id), timeout=timeout, raise_on_error=True),
+                timeout=timeout,
+                allow_uncertain=False,
+            )
+        else:
             raise BskError(
                 f"不支持的标签动作：{action}",
                 friendly=(
@@ -3215,67 +3187,6 @@ class BskService:
                 code="unsupported_action",
             )
 
-        argv: list[str] = ["tab", spec.argv[1]]
-        target_tab_id = tab_id if tab_id is not None else opts.get("tab_id")
-        if spec.takes_tab_id:
-            if target_tab_id is None or target_tab_id == "":
-                raise BskError(
-                    f"tab {action} 需要 tab_id",
-                    friendly=(
-                        f"「tab {action}」必须给出要操作的标签 id"
-                        "（先用 bsk_tabs(action=\"list\") 查看）。"
-                    ),
-                    code="missing_tab_id",
-                )
-            argv.append(str(int(target_tab_id)))
-
-        if action == "list":
-            scope = opts.get("scope")
-            if scope:
-                argv += ["--scope", str(scope)]
-        elif action == "create":
-            url = opts.get("url")
-            if url:
-                argv += ["--url", str(url)]
-            index = opts.get("index")
-            if index is not None:
-                argv += ["--index", str(int(index))]
-            # --no-active 是"后台打开"，所以 active=True（默认）时不发任何开关。
-            if opts.get("active") is False:
-                argv.append("--no-active")
-
-        close_extra_args: list[str] = []
-        if action == "close" and target_tab_id is not None:
-            # 执行 tab close 时，先尝试 select 聚焦，再带上该标签页的同步凭据以规避 observation_required 与 observation_changed
-            try:
-                await self.sessions.execute(
-                    session_key,
-                    lambda sid: ["tab", "select", str(int(target_tab_id)), "--session", sid, "--json"],
-                    timeout=self._timeout(TIMEOUT_FAST),
-                )
-            except Exception:  # noqa: BLE001
-                pass
-
-            try:
-                obs_res = await self.sync_session(session_key, tab_id=int(target_tab_id))
-                ctx_id = getattr(obs_res, "context_id", None)
-                obs_id = getattr(obs_res, "observation_id", None)
-                if ctx_id:
-                    close_extra_args += ["--context", str(ctx_id)]
-                if obs_id:
-                    close_extra_args += ["--observation", str(obs_id)]
-            except Exception as exc:  # noqa: BLE001
-                self._logger.debug("关闭标签页前同步凭证失败（降级直接关闭）：%r", exc)
-
-        result = await self.sessions.execute(
-            session_key,
-            lambda sid: [*argv, *close_extra_args, "--session", sid, "--json"],
-            timeout=self._timeout(TIMEOUT_ACTION),
-            # 标签管理本身是"窗口/标签"操作，不是页面写操作；但它会改变
-            # 会话能看到的标签集合，且 borrow/return 涉及用户自己的标签。
-            # 保守起见一律不允许在不确定态下执行 —— 与写类动作同一档。
-            allow_uncertain=False,
-        )
         data = result.data
         out: dict[str, Any] = {
             "session": self._session_field(session_key),
@@ -3436,20 +3347,17 @@ class BskService:
         """
         del tab_id  # CLI §8 无此选项，见 docstring 的 Note。
         session_key = self._resolve_key(key)
-        result = await self.sessions.execute(
+        timeout = self._timeout(TIMEOUT_ACTION)
+        result = await self.sessions.execute_action(
             session_key,
-            lambda sid: [
-                "window",
-                "resize",
-                "--width",
-                str(int(width)),
-                "--height",
-                str(int(height)),
-                "--session",
+            lambda sid: self.cli.resize_window(
                 sid,
-                "--json",
-            ],
-            timeout=self._timeout(TIMEOUT_ACTION),
+                width=width,
+                height=height,
+                timeout=timeout,
+                raise_on_error=True,
+            ),
+            timeout=timeout,
             # 改窗口尺寸不碰页面数据，不确定态下做它是安全的。
             allow_uncertain=True,
         )
@@ -3494,25 +3402,22 @@ class BskService:
             默认值一致）。
         """
         session_key = self._resolve_key(key)
-
-        if off:
-            args = ["--off"]
-        else:
-            args = []
-            device_name = self._coerce_device(device)
-            if device_name:
-                args += ["--device", device_name]
-            # --width/--height 必须同时给（报告 §9：无 --device 时要求同时给；
-            # 有 device 时给出则表示"手动覆盖预设的单个字段"，所以给了就一起给）。
-            args += self._size_args(width, height)
-            if mobile:
-                args.append("--mobile")
-
-        result = await self.sessions.execute(
+        device_name = self._coerce_device(device) if not off else None
+        timeout = self._timeout(TIMEOUT_ACTION)
+        result = await self.sessions.execute_action(
             session_key,
-            lambda sid: self._with_tab_id(["emulate", *args], tab_id)
-            + ["--session", sid, "--json"],
-            timeout=self._timeout(TIMEOUT_ACTION),
+            lambda sid: self.cli.emulate(
+                sid,
+                device=device_name or None,
+                width=width,
+                height=height,
+                mobile=mobile,
+                off=off,
+                tab_id=tab_id,
+                timeout=timeout,
+                raise_on_error=True,
+            ),
+            timeout=timeout,
             allow_uncertain=True,
         )
         data = result.data if isinstance(result.data, dict) else {}
@@ -3559,26 +3464,24 @@ class BskService:
             逐键翻译只会把两个已经对齐的命名空间又拧开一次。
         """
         session_key = self._resolve_key(key)
-        args: list[str] = ["--prompt", str(prompt)]
-        if title:
-            args += ["--title", str(title)]
-        for target in targets or []:
-            args += ["--target", str(target)]
-        args += ["--timeout", self._bsk_duration(timeout_ms)]
-        if completion_criteria:
-            args += [
-                "--completion-criteria",
-                self._render_debug_value("completion_criteria", completion_criteria),
-            ]
-
-        result = await self.sessions.execute(
+        timeout = self._wait_timeout(timeout_ms)
+        result = await self.sessions.execute_action(
             session_key,
-            lambda sid: self._with_tab_id(["request-help", *args], tab_id)
-            + ["--session", sid, "--json"],
+            lambda sid: self.cli.request_help(
+                sid,
+                prompt=prompt,
+                title=title or None,
+                targets=targets,
+                timeout_ms=timeout_ms,
+                completion_criteria=completion_criteria,
+                tab_id=tab_id,
+                timeout=timeout,
+                raise_on_error=True,
+            ),
             # 这是**人在回路**的操作：真人要走到电脑前、看清提示、动手做完。
             # 所以外层超时必须比 bsk 自己的预算（--timeout，默认 5m）更大，
             # 否则我们会在人还没做完的时候先把它掐掉。
-            timeout=self._wait_timeout(timeout_ms),
+            timeout=timeout,
             # 只读：它不改页面，只是显示一个面板并等人。
             allow_uncertain=True,
         )
@@ -3641,29 +3544,30 @@ class BskService:
             else self._timeout(TIMEOUT_SCREENSHOT)
         )
 
-        argv = ["screenshot", "--out", str(Path(out_path).resolve().absolute())]
-        if ref:
-            argv += ["--ref", ref]
-        if use_full_page:
-            argv.append("--full-page")
-            scope = getattr(self.settings, "fullpage_scope", "current") or "current"
-            argv.extend(["--scope", scope])
-            token = str(observation or "").strip() or self._session_observations.pop(session_key, None)
-            if token:
-                argv.extend(["--observation", token])
+        scope = (getattr(self.settings, "fullpage_scope", "current") or "current") if use_full_page else None
+        token = (str(observation or "").strip() or self._session_observations.pop(session_key, None)) if use_full_page else None
 
-        async def _run_shot(current_argv: list[str]) -> Any:
-            return await self.sessions.execute(
+        async def _run_shot(obs_token: str | None) -> Any:
+            return await self.sessions.execute_action(
                 session_key,
-                lambda sid: self._with_tab_id(current_argv, tab_id)
-                + ["--session", sid, "--json"],
+                lambda sid: self.cli.screenshot(
+                    sid,
+                    out=str(Path(out_path).resolve().absolute()),
+                    ref=ref or None,
+                    full_page=use_full_page,
+                    scope=scope,
+                    observation=obs_token,
+                    tab_id=tab_id,
+                    timeout=timeout,
+                    raise_on_error=True,
+                ),
                 timeout=timeout,
                 # 截图是只读动作（但全页滚动在底层可能受操作安全护栏保护）。
                 allow_uncertain=True,
             )
 
         try:
-            result = await _run_shot(argv)
+            result = await _run_shot(token)
         except BskError as exc:
             reason = getattr(exc, "reason", "")
             effect_state = getattr(exc, "effect_state", "")
@@ -3680,15 +3584,8 @@ class BskService:
             ):
                 self._logger.info("全页截图遇到控制上下文或令牌需同步 (%s)，执行 sync_session 补救", reason)
                 obs = await self.sync_session(session_key, tab_id=tab_id)
-                retry_argv = ["screenshot", "--out", str(out_path)]
-                if ref:
-                    retry_argv += ["--ref", ref]
-                retry_argv.append("--full-page")
-                scope = getattr(self.settings, "fullpage_scope", "current") or "current"
-                retry_argv.extend(["--scope", scope])
-                retry_argv.extend(["--observation", obs.observation_id])
                 self._session_observations.pop(session_key, None)
-                result = await _run_shot(retry_argv)
+                result = await _run_shot(obs.observation_id)
             else:
                 raise
         finally:
@@ -3833,145 +3730,7 @@ MUTATING_DEBUG_ACTIONS: frozenset[str] = frozenset(
 """
 
 
-@dataclass(slots=True)
-class _InteractSpec:
-    """一条交互动作 → bsk 命令的映射。
 
-    Attributes:
-        argv: 命令头（例如 ``["scroll-to"]``；``["click"]``）。
-        leading_positionals: 必填的**前置位置参数**名（``press`` 的 ``key``）。
-        allows_target: ``target`` 是否作为位置参数拼进去。
-        requires_target: 是否要求 ``target`` 非空。
-        value_flags: ``(参数名, flag)`` 列表，按固定顺序拼接。
-        bool_flags: ``(参数名, flag)`` 开关。
-        ms_flags: ``(参数名, flag)``，值是毫秒，渲染成 ``30s``/``1500ms``。
-        readonly: True 表示允许在会话不确定态下执行。
-    """
-
-    argv: tuple[str, ...]
-    leading_positionals: tuple[str, ...] = ()
-    allows_target: bool = False
-    requires_target: bool = False
-    value_flags: tuple[tuple[str, str], ...] = ()
-    bool_flags: tuple[tuple[str, str], ...] = ()
-    ms_flags: tuple[tuple[str, str], ...] = ()
-    readonly: bool = False
-
-
-# 9 个 action（TOOL-SPEC §1.4）。CLI 报告的章节：§21 click、§22 hover、
-# §23 wheel、§24 scroll-to、§25 focus、§26 blur、§27 fill、§29 select、
-# §28 press。
-#
-# readonly 的判定标准是"这个动作会不会改变页面数据"：
-#   - wheel / scroll_to / focus / blur 只改变视口或焦点，不提交任何东西，
-#     不确定态下做它们是安全的（而且常常正是"看清楚刚才到底点了什么"所需）；
-#   - click / hover / fill / select / press 会改页面数据（悬停会展开菜单、
-#     触发页面自己的 JS），一律按写类动作处理。
-#
-# ⚠️ ``press`` 的 target 走 ``--ref``（CLI 报告 §28：``--ref`` 是"派发按键前
-# 先聚焦的可选 snapshot ref"）—— 这是 TOOL-SPEC §1.4 点名的"唯一特例"。
-# 这里只发 ``--ref``，不发 ``--selector``：两个都发是非法组合，而
-# "用户到底想要哪个"无从判断（ref 与 selector 的判别规则在上层校验层）。
-INTERACT_SPECS: dict[str, _InteractSpec] = {
-    "click": _InteractSpec(
-        argv=("click",),
-        allows_target=True,
-        requires_target=True,
-        value_flags=(
-            ("button", "--button"),
-            ("click_count", "--click-count"),
-            ("modifiers", "--modifiers"),
-            ("capture_id", "--capture"),
-            ("image_x", "--image-x"),
-            ("image_y", "--image-y"),
-        ),
-        ms_flags=(("timeout_ms", "--timeout"),),
-    ),
-    "hover": _InteractSpec(
-        argv=("hover",),
-        allows_target=True,
-        requires_target=True,
-        value_flags=(("modifiers", "--modifiers"),),
-        ms_flags=(
-            ("settle_ms", "--settle"),
-            ("timeout_ms", "--timeout"),
-        ),
-    ),
-    "wheel": _InteractSpec(
-        argv=("wheel",),
-        allows_target=True,
-        value_flags=(
-            ("delta_x", "--delta-x"),
-            ("delta_y", "--delta-y"),
-            ("modifiers", "--modifiers"),
-            ("observation_id", "--observation"),
-        ),
-        ms_flags=(("timeout_ms", "--timeout"),),
-        readonly=True,
-    ),
-    # 键用连字符，与 bsk CLI 的子命令名、以及 bsk/tools.py 里
-    # TOOL_ACTIONS 的写法逐字一致（DSH 的 action 名也是 "scroll-to"）。
-    # 曾经这里写成下划线的 "scroll_to"，而 tools.validate 输出的是连字符，
-    # 两边对不上导致该 action 落进"没有对应子命令"分支、完全不可用。
-    "scroll-to": _InteractSpec(
-        argv=("scroll-to",),
-        allows_target=True,
-        requires_target=True,
-        ms_flags=(("timeout_ms", "--timeout"),),
-        readonly=True,
-    ),
-    "focus": _InteractSpec(
-        argv=("focus",),
-        allows_target=True,
-        requires_target=True,
-        ms_flags=(("timeout_ms", "--timeout"),),
-        readonly=True,
-    ),
-    "blur": _InteractSpec(
-        argv=("blur",),
-        allows_target=True,
-        requires_target=True,
-        ms_flags=(("timeout_ms", "--timeout"),),
-        readonly=True,
-    ),
-    "fill": _InteractSpec(
-        argv=("fill",),
-        allows_target=True,
-        requires_target=True,
-        # fill 的 --value 是必填的（CLI 报告 §27），而且**空串也要发出去**：
-        # "把字段清空"是一个正当操作，按"空值就跳过"的通用规则处理会做不到
-        # 这件事（还会把一次清空悄悄变成一次不改动）。例外登记在
-        # _EMPTY_VALUE_OK 里。
-        value_flags=(("value", "--value"),),
-        bool_flags=(("no_clear", "--no-clear"),),
-        ms_flags=(("timeout_ms", "--timeout"),),
-    ),
-    "select": _InteractSpec(
-        argv=("select",),
-        allows_target=True,
-        requires_target=True,
-        value_flags=(("values", "--value"),),
-        ms_flags=(("timeout_ms", "--timeout"),),
-    ),
-    "press": _InteractSpec(
-        argv=("press",),
-        leading_positionals=("key",),
-        value_flags=(
-            ("target", "--ref"),
-            ("modifiers", "--modifiers"),
-            ("observation_id", "--observation"),
-        ),
-        ms_flags=(
-            ("hold_ms", "--hold-ms"),
-            ("timeout_ms", "--timeout"),
-        ),
-    ),
-}
-
-# ``fill`` 的 ``--value`` 允许是空串（"清空这个字段"）。
-# 单独一张表而不是在 spec 里加字段：只有它一条有这个需求，加一个只被用到
-# 一次的开关会让 _InteractSpec 变复杂，而复杂度正是要省的东西。
-_EMPTY_VALUE_OK: frozenset[tuple[str, str]] = frozenset({("fill", "value")})
 
 # ``press`` 要按的键在 ``interact(**opts)`` 里可以用的名字。
 #
@@ -3984,24 +3743,6 @@ _EMPTY_VALUE_OK: frozenset[tuple[str, str]] = frozenset({("fill", "value")})
 # （技术上它进不了 opts，留着只是让人一眼看出对应关系）。
 _PRESS_KEY_ALIASES: tuple[str, ...] = ("press_key", "key")
 
-
-@dataclass(slots=True)
-class _TabSpec:
-    """一条标签动作 → bsk 命令的映射。"""
-
-    argv: tuple[str, str]
-    takes_tab_id: bool
-
-
-# 6 个 action（TOOL-SPEC §1.5），全部来自 CLI 报告 §7。
-TABS_SPECS: dict[str, _TabSpec] = {
-    "list": _TabSpec(argv=("tab", "list"), takes_tab_id=False),
-    "create": _TabSpec(argv=("tab", "create"), takes_tab_id=False),
-    "select": _TabSpec(argv=("tab", "select"), takes_tab_id=True),
-    "close": _TabSpec(argv=("tab", "close"), takes_tab_id=True),
-    "borrow": _TabSpec(argv=("tab", "borrow"), takes_tab_id=True),
-    "return": _TabSpec(argv=("tab", "return"), takes_tab_id=True),
-}
 
 # ``bsk debug`` 的带值选项（CLI 报告 §15 全表）。键是参数名（snake_case），
 # 值是命令行 flag。**只包含报告里真实存在的项**，一个都不加。
@@ -4037,20 +3778,3 @@ DEBUG_VALUE_FLAGS: dict[str, str] = {
 DEBUG_BOOL_FLAGS: dict[str, str] = {
     "include_controlled": "--include-controlled",
 }
-
-
-class ServiceHelper:
-    """给上面的表格用的小工具集合（不实例化，纯静态）。"""
-
-    @staticmethod
-    def ms_value(value: Any) -> str:
-        """毫秒 → bsk 的时间字面量（``200ms`` / ``1s``）。"""
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return str(value)
-        if number <= 0:
-            number = 1.0
-        if number % 1000 == 0:
-            return f"{int(number) // 1000}s"
-        return f"{int(number)}ms"

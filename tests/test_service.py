@@ -154,6 +154,8 @@ class FakeRunner:
             data = {}
         return BskResult(ok=True, exit_code=0, data=data, elapsed=0.0)
 
+    run = run_or_raise
+
 
 def make_settings(**overrides: Any) -> Any:
     """造一份真实的 ``Settings``（走 ``parse_settings``，含夹取）。

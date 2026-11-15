@@ -118,7 +118,7 @@ class BskCli:
         Returns:
             BskResult 包含 observation_id 与 context_id 的执行结果。
         """
-        params = ["sync"]
+        params = ["sync", "--session", str(session)]
         if wait_for:
             params.extend(["--wait-for", str(wait_for)])
         if wait_not:
@@ -129,7 +129,6 @@ class BskCli:
             params.extend(["--max-tokens", str(int(max_tokens))])
         if tab_id is not None:
             params.extend(["--tab-id", str(tab_id)])
-        params.extend(["--session", str(session)])
         if json:
             params.append("--json")
         return await self._execute(
@@ -176,7 +175,7 @@ class BskCli:
         self,
         session: str | None = None,
         *,
-        scope: str = "agent",
+        scope: str | None = "agent",
         json: bool = True,
         timeout: float = 5.0,
         raise_on_error: bool = False,
@@ -185,7 +184,7 @@ class BskCli:
 
         Args:
             session: 浏览器会话标识 (Session ID)；若为 None 则列出全局/默认范围。
-            scope: 范围限定，如 'agent' 或 'user'（默认 'agent'）。
+            scope: 范围限定，如 'agent' 或 'user'（默认 'agent'；为 None 时不传 --scope）。
             json: 是否输出 JSON 格式（默认 True）。
             timeout: 命令超时时间（秒，默认 5.0）。
             raise_on_error: 失败时是否抛出异常（默认 False）。
@@ -193,7 +192,9 @@ class BskCli:
         Returns:
             BskResult 包含 tabs 列表的执行结果。
         """
-        params = ["tab", "list", "--scope", str(scope)]
+        params = ["tab", "list"]
+        if scope:
+            params.extend(["--scope", str(scope)])
         if session:
             params.extend(["--session", str(session)])
         if json:
@@ -207,6 +208,7 @@ class BskCli:
         session: str,
         url: str | None = None,
         *,
+        index: int | None = None,
         active: bool = True,
         json: bool = True,
         timeout: float = 5.0,
@@ -217,6 +219,7 @@ class BskCli:
         Args:
             session: 浏览器会话标识 (Session ID)。
             url: 目标 URL（可选，默认打开空白页或起始页）。
+            index: 在标签栏中的插入位置（可选）。
             active: 是否自动激活新标签页（默认 True；为 False 时传 --no-active 作为后台标签打开）。
             json: 是否输出 JSON 格式（默认 True）。
             timeout: 命令超时时间（秒，默认 5.0）。
@@ -228,6 +231,8 @@ class BskCli:
         params = ["tab", "create", "--session", str(session)]
         if url:
             params.extend(["--url", str(url)])
+        if index is not None:
+            params.extend(["--index", str(int(index))])
         if not active:
             params.append("--no-active")
         if json:
@@ -1239,10 +1244,21 @@ class BskCli:
         **opts: Any,
     ) -> BskResult:
         """动态交互动作分发入口。"""
+        from .errors import BskError
+
         normalized_action = action.replace("_", "-")
+        target_str = str(opts.get("target") or target or "").strip()
+
+        if normalized_action in ("click", "hover", "scroll-to", "focus", "blur", "fill", "select") and not target_str:
+            raise BskError(
+                f"{action} 需要 target",
+                friendly=f"「{action}」必须指定要操作的元素：给 target 传元素编号（如 @e3）或 CSS 选择器。",
+                code="missing_target",
+            )
+
         if normalized_action == "click":
             return await self.click(
-                session, target, tab_id=tab_id, timeout=timeout, raise_on_error=raise_on_error,
+                session, target_str, tab_id=tab_id, timeout=timeout, raise_on_error=raise_on_error,
                 button=opts.get("button"), click_count=opts.get("click_count"),
                 modifiers=opts.get("modifiers"), capture_id=opts.get("capture_id"),
                 image_x=opts.get("image_x"), image_y=opts.get("image_y"),
@@ -1250,55 +1266,63 @@ class BskCli:
             )
         if normalized_action == "hover":
             return await self.hover(
-                session, target, tab_id=tab_id, timeout=timeout, raise_on_error=raise_on_error,
+                session, target_str, tab_id=tab_id, timeout=timeout, raise_on_error=raise_on_error,
                 modifiers=opts.get("modifiers"), settle_ms=opts.get("settle_ms"),
                 timeout_ms=opts.get("timeout_ms"),
             )
         if normalized_action == "scroll-to":
             return await self.scroll_to(
-                session, target, tab_id=tab_id, timeout=timeout, raise_on_error=raise_on_error,
+                session, target_str, tab_id=tab_id, timeout=timeout, raise_on_error=raise_on_error,
                 timeout_ms=opts.get("timeout_ms"),
             )
         if normalized_action == "focus":
             return await self.focus(
-                session, target, tab_id=tab_id, timeout=timeout, raise_on_error=raise_on_error,
+                session, target_str, tab_id=tab_id, timeout=timeout, raise_on_error=raise_on_error,
                 timeout_ms=opts.get("timeout_ms"),
             )
         if normalized_action == "blur":
             return await self.blur(
-                session, target, tab_id=tab_id, timeout=timeout, raise_on_error=raise_on_error,
+                session, target_str, tab_id=tab_id, timeout=timeout, raise_on_error=raise_on_error,
                 timeout_ms=opts.get("timeout_ms"),
             )
         if normalized_action == "fill":
             return await self.fill(
-                session, target, str(opts.get("value", "")), tab_id=tab_id, timeout=timeout,
+                session, target_str, str(opts.get("value", "")), tab_id=tab_id, timeout=timeout,
                 raise_on_error=raise_on_error, no_clear=bool(opts.get("no_clear", False)),
                 timeout_ms=opts.get("timeout_ms"),
             )
         if normalized_action == "press":
             key = str(opts.get("key") or opts.get("press_key") or "")
+            if not key:
+                raise BskError(
+                    "press 缺少 key",
+                    friendly="「press」必须提供 key 参数。",
+                    code="missing_argument",
+                )
             return await self.press(
-                session, key, target=target or None, tab_id=tab_id, timeout=timeout,
+                session, key, target=target_str or None, tab_id=tab_id, timeout=timeout,
                 raise_on_error=raise_on_error, modifiers=opts.get("modifiers"),
                 observation_id=opts.get("observation_id"), hold_ms=opts.get("hold_ms"),
                 timeout_ms=opts.get("timeout_ms"),
             )
         if normalized_action == "select":
             vals = opts.get("values") or ([opts["value"]] if "value" in opts else [])
+            if not vals:
+                raise BskError("select 需要 value", friendly="请提供要选中的选项值。", code="missing_argument")
             return await self.select(
-                session, target, vals, tab_id=tab_id, timeout=timeout,
+                session, target_str, vals, tab_id=tab_id, timeout=timeout,
                 raise_on_error=raise_on_error, timeout_ms=opts.get("timeout_ms"),
             )
         if normalized_action == "wheel":
             return await self.wheel(
                 session, delta_x=int(opts.get("delta_x", 0)), delta_y=int(opts.get("delta_y", 0)),
-                target=target or None, modifiers=opts.get("modifiers"),
+                target=target_str or None, modifiers=opts.get("modifiers"),
                 observation_id=opts.get("observation_id"), timeout_ms=opts.get("timeout_ms"),
                 tab_id=tab_id, timeout=timeout, raise_on_error=raise_on_error,
             )
         if normalized_action == "drag":
             return await self.drag(
-                session, target, to_ref=opts.get("to_ref"), to_selector=opts.get("to_selector"),
+                session, target_str, to_ref=opts.get("to_ref"), to_selector=opts.get("to_selector"),
                 offset_x=opts.get("offset_x"), offset_y=opts.get("offset_y"),
                 timeout_ms=opts.get("timeout_ms"), tab_id=tab_id, timeout=timeout,
                 raise_on_error=raise_on_error,
@@ -1306,7 +1330,7 @@ class BskCli:
         if normalized_action == "upload":
             files = opts.get("files") or ([opts["file"]] if "file" in opts else [])
             return await self.upload(
-                session, target, files, timeout_ms=opts.get("timeout_ms"),
+                session, target_str, files, timeout_ms=opts.get("timeout_ms"),
                 tab_id=tab_id, timeout=timeout, raise_on_error=raise_on_error,
             )
         if normalized_action == "download":
@@ -1317,7 +1341,7 @@ class BskCli:
             )
         if normalized_action == "wait-for-element":
             return await self.wait_for_element(
-                session, target, state=str(opts.get("state", "visible")),
+                session, target_str, state=str(opts.get("state", "visible")),
                 timeout_ms=int(opts.get("timeout_ms", 30000)), tab_id=tab_id,
                 timeout=timeout, raise_on_error=raise_on_error,
             )
@@ -1326,7 +1350,6 @@ class BskCli:
                 session, int(opts.get("duration_ms", 0)), tab_id=tab_id,
                 timeout=timeout, raise_on_error=raise_on_error,
             )
-        from .errors import BskError
         raise BskError(f"不支持的交互动作: {action}", code="unsupported_action")
 
     # =========================================================================
@@ -1395,6 +1418,7 @@ class BskCli:
         session: str,
         debug_action: str,
         *,
+        id: str | None = None,
         tab_id: int | None = None,
         json: bool = True,
         timeout: float = 10.0,
@@ -1402,12 +1426,20 @@ class BskCli:
         **extra_args: Any,
     ) -> BskResult:
         """执行页面调试命令。"""
+        import json as _json
+
         params = ["debug", str(debug_action)]
+        if id:
+            params.append(str(id))
         for k, v in extra_args.items():
+            if v is None or v is False or v == "":
+                continue
             flag = f"--{k.replace('_', '-')}"
             if v is True:
                 params.append(flag)
-            elif v is not False and v is not None:
+            elif isinstance(v, (dict, list)):
+                params.extend([flag, _json.dumps(v, ensure_ascii=False, separators=(",", ":"))])
+            else:
                 params.extend([flag, str(v)])
         if tab_id is not None:
             params.extend(["--tab-id", str(tab_id)])
@@ -1433,6 +1465,8 @@ class BskCli:
         format: str | None = None,
         quality: int | None = None,
         tab_id: int | None = None,
+        scope: str | None = None,
+        observation: str | None = None,
         json: bool = True,
         timeout: float = 30.0,
         raise_on_error: bool = False,
@@ -1451,6 +1485,10 @@ class BskCli:
             params.extend(["--format", str(format)])
         if quality is not None:
             params.extend(["--quality", str(int(quality))])
+        if scope:
+            params.extend(["--scope", str(scope)])
+        if observation:
+            params.extend(["--observation", str(observation)])
         if tab_id is not None:
             params.extend(["--tab-id", str(tab_id)])
         params.extend(["--session", str(session)])
@@ -1467,6 +1505,9 @@ class BskCli:
         device: str | None = None,
         width: int | None = None,
         height: int | None = None,
+        mobile: bool = False,
+        no_mobile: bool = False,
+        off: bool = False,
         user_agent: str | None = None,
         touch: bool | None = None,
         tab_id: int | None = None,
@@ -1476,18 +1517,27 @@ class BskCli:
     ) -> BskResult:
         """模拟移动设备视口或环境。"""
         params = ["emulate"]
-        if device:
-            params.extend(["--device", str(device)])
-        if width is not None:
-            params.extend(["--width", str(int(width))])
-        if height is not None:
-            params.extend(["--height", str(int(height))])
-        if user_agent:
-            params.extend(["--user-agent", str(user_agent)])
-        if touch is True:
-            params.append("--touch")
-        elif touch is False:
-            params.append("--no-touch")
+        if off:
+            params.append("--off")
+        else:
+            if device:
+                params.extend(["--device", str(device)])
+            if width is not None and height is not None:
+                params.extend(["--width", str(int(width)), "--height", str(int(height))])
+            elif width is not None:
+                params.extend(["--width", str(int(width))])
+            elif height is not None:
+                params.extend(["--height", str(int(height))])
+            if mobile:
+                params.append("--mobile")
+            elif no_mobile:
+                params.append("--no-mobile")
+            if user_agent:
+                params.extend(["--ua", str(user_agent)])
+            if touch is True:
+                params.append("--touch")
+            elif touch is False:
+                params.append("--no-touch")
         if tab_id is not None:
             params.extend(["--tab-id", str(tab_id)])
         params.extend(["--session", str(session)])
@@ -1518,18 +1568,38 @@ class BskCli:
     async def request_help(
         self,
         session: str,
-        message: str,
+        prompt: str,
         *,
+        title: str | None = None,
+        targets: list[str] | None = None,
+        timeout_ms: int | None = None,
         timeout_sec: int | None = None,
+        completion_criteria: dict | str | None = None,
         tab_id: int | None = None,
         json: bool = True,
         timeout: float = 60.0,
         raise_on_error: bool = False,
     ) -> BskResult:
         """向人类请求交互协助。"""
-        params = ["request-help", str(message)]
-        if timeout_sec is not None:
+        import json as _json
+
+        params = ["request-help", "--prompt", str(prompt)]
+        if title:
+            params.extend(["--title", str(title)])
+        for t in targets or []:
+            params.extend(["--target", str(t)])
+        if timeout_ms is not None:
+            params.extend(["--timeout", format_duration(timeout_ms)])
+        elif timeout_sec is not None:
             params.extend(["--timeout", f"{int(timeout_sec)}s"])
+        if completion_criteria:
+            if isinstance(completion_criteria, str):
+                params.extend(["--completion-criteria", completion_criteria])
+            else:
+                params.extend([
+                    "--completion-criteria",
+                    _json.dumps(completion_criteria, ensure_ascii=False, separators=(",", ":")),
+                ])
         if tab_id is not None:
             params.extend(["--tab-id", str(tab_id)])
         params.extend(["--session", str(session)])

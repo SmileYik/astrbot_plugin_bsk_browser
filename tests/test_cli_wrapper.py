@@ -417,7 +417,7 @@ def test_cli_diagnostics_screenshot_emulate_window_help():
         runner.run.reset_mock()
         await cli.emulate("sess1", device="iPhone 14", width=390, height=844, user_agent="CustomUA", touch=True, tab_id=1)
         runner.run.assert_awaited_once_with(
-            ["emulate", "--device", "iPhone 14", "--width", "390", "--height", "844", "--user-agent", "CustomUA", "--touch", "--tab-id", "1", "--session", "sess1", "--json"],
+            ["emulate", "--device", "iPhone 14", "--width", "390", "--height", "844", "--ua", "CustomUA", "--touch", "--tab-id", "1", "--session", "sess1", "--json"],
             timeout=10.0,
         )
 
@@ -433,7 +433,7 @@ def test_cli_diagnostics_screenshot_emulate_window_help():
         runner.run.reset_mock()
         await cli.request_help("sess1", "Please solve captcha", timeout_sec=60, tab_id=1)
         runner.run.assert_awaited_once_with(
-            ["request-help", "Please solve captcha", "--timeout", "60s", "--tab-id", "1", "--session", "sess1", "--json"],
+            ["request-help", "--prompt", "Please solve captcha", "--timeout", "60s", "--tab-id", "1", "--session", "sess1", "--json"],
             timeout=60.0,
         )
     asyncio.run(_test())

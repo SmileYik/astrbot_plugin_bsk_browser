@@ -36,21 +36,16 @@ def test_close_tab_removes_from_known_and_switches_focus():
         service._resolve_key = MagicMock(return_value="test_sess")
         service._session_known_tabs["test_sess"] = {101, 102}
 
-        # 模拟底层 execute 调用
-        async def mock_execute(key, fn, **kwargs):
-            # 模拟执行 tab close 102
-            cmd = fn("fake_sid")
-            if "close" in cmd:
-                return MagicMock(data={"tab_id": 102})
-            elif "list" in cmd:
-                return MagicMock(data=[
-                    {"tab_id": 101, "title": "Main Page", "url": "https://www.baidu.com"}
-                ])
-            elif "select" in cmd:
-                return MagicMock(data={"tab_id": 101})
-            return MagicMock(data={})
+        async def mock_execute_action(key, action, **kwargs):
+            return await action("fake_sid")
 
-        service.sessions.execute = AsyncMock(side_effect=mock_execute)
+        service.sessions.execute_action = AsyncMock(side_effect=mock_execute_action)
+        service.sessions.close_tab_safe = AsyncMock(return_value=MagicMock(data={"tab_id": 102}))
+        service.cli = MagicMock()
+        service.cli.list_tabs = AsyncMock(return_value=MagicMock(data=[
+            {"tab_id": 101, "title": "Main Page", "url": "https://www.baidu.com"}
+        ]))
+        service.cli.select_tab = AsyncMock(return_value=MagicMock(data={"tab_id": 101}))
 
         out = await service.tabs("test_sess", "close", tab_id=102)
 
@@ -256,29 +251,18 @@ def test_service_tabs_close_fetches_sync_credentials():
         from bsk.service import BskService
 
         service = BskService(settings=MagicMock(), runner=MagicMock(), logger=MagicMock())
-        # mock sync_session
-        service.sync_session = AsyncMock(return_value=MagicMock(
-            observation_id="obs-tab-close-456",
-            context_id="ctx-tab-close-789",
-        ))
         service.sessions = MagicMock()
-        service.sessions.execute = AsyncMock(return_value=MagicMock(data={"tab_id": 105}))
+        service.sessions.close_tab_safe = AsyncMock(return_value=MagicMock(data={"tab_id": 105}))
         service._resolve_key = MagicMock(return_value="sess_key")
 
         await service.tabs("sess_key", "close", tab_id=105)
 
-        # 验证调用了 sync_session 并带上了 tab_id
-        service.sync_session.assert_awaited_once_with("sess_key", tab_id=105)
-
-        # 验证 sessions.execute 构造的关闭命令行中包含了凭证
-        assert service.sessions.execute.call_count >= 1
-        _key, cmd_factory = service.sessions.execute.call_args_list[0][0]
-        cmd = cmd_factory("sid_123")
-        assert "close" in cmd
-        assert "--observation" in cmd
-        assert "obs-tab-close-456" in cmd
-        assert "--context" in cmd
-        assert "ctx-tab-close-789" in cmd
+        # 验证调用了 sessions.close_tab_safe 并带上了 tab_id
+        service.sessions.close_tab_safe.assert_awaited_once()
+        args, kwargs = service.sessions.close_tab_safe.call_args
+        assert args[0] == "sess_key"
+        assert args[1] == 105
+        assert kwargs.get("raise_on_error") is True
 
     asyncio.run(_test())
 
