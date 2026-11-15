@@ -45,7 +45,11 @@ from .bsk.config import (
     validate_settings,
 )
 from .bsk.errors import BskError
-from .bsk.logger import truncate_log_text
+from .bsk.logger import (
+    TeeLogger,
+    create_safe_file_logger,
+    truncate_log_text,
+)
 from .bsk.models import ConsoleLog
 from .bsk.service import BskService
 from .bsk.tools import BskToolError
@@ -330,8 +334,9 @@ def _trace_tool_call(tool_name: str):
                     combined_args["_args"] = args
                 max_len = getattr(self.settings, "log_max_output_length", 2048)
                 args_trunc = truncate_log_text(combined_args, max_len)
+                trace_logger = getattr(self, "_plugin_logger", None) or astrbot_logger
 
-                astrbot_logger.debug(
+                trace_logger.debug(
                     "[工具调用开始] 工具: %s | 会话: %s (umo=%s, sender=%s) | 参数: %s",
                     tool_name,
                     session_key,
@@ -353,7 +358,7 @@ def _trace_tool_call(tool_name: str):
                     if exc_info is None:
                         summary = " | ".join(str(o) for o in outputs)
                         ret_trunc = truncate_log_text(summary, max_len)
-                        astrbot_logger.debug(
+                        trace_logger.debug(
                             "[工具调用结束] 工具: %s | 会话: %s | 耗时: %.3fs | 状态: 成功 | 返回: %s",
                             tool_name,
                             session_key,
@@ -361,7 +366,7 @@ def _trace_tool_call(tool_name: str):
                             ret_trunc,
                         )
                     else:
-                        astrbot_logger.debug(
+                        trace_logger.debug(
                             "[工具调用结束] 工具: %s | 会话: %s | 耗时: %.3fs | 状态: 异常 | 错误: %r",
                             tool_name,
                             session_key,
@@ -388,8 +393,9 @@ def _trace_tool_call(tool_name: str):
                 combined_args["_args"] = args
             max_len = getattr(self.settings, "log_max_output_length", 2048)
             args_trunc = truncate_log_text(combined_args, max_len)
+            trace_logger = getattr(self, "_plugin_logger", None) or astrbot_logger
 
-            astrbot_logger.debug(
+            trace_logger.debug(
                 "[工具调用开始] 工具: %s | 会话: %s (umo=%s, sender=%s) | 参数: %s",
                 tool_name,
                 session_key,
@@ -409,7 +415,7 @@ def _trace_tool_call(tool_name: str):
                 elapsed = time.monotonic() - started
                 if exc_info is None:
                     ret_trunc = truncate_log_text(ret, max_len)
-                    astrbot_logger.debug(
+                    trace_logger.debug(
                         "[工具调用结束] 工具: %s | 会话: %s | 耗时: %.3fs | 状态: 成功 | 返回: %s",
                         tool_name,
                         session_key,
@@ -417,7 +423,7 @@ def _trace_tool_call(tool_name: str):
                         ret_trunc,
                     )
                 else:
-                    astrbot_logger.debug(
+                    trace_logger.debug(
                         "[工具调用结束] 工具: %s | 会话: %s | 耗时: %.3fs | 状态: 异常 | 错误: %r",
                         tool_name,
                         session_key,
@@ -459,10 +465,23 @@ class BskBrowserPlugin(Star):
         # 也不 import 内置 logging（审核要求），只认 bsk/logger.py 的接口。
         # astrbot_logger 是框架的插件 logger 代理，会按调用方模块名路由到
         # 本插件专属的 logger 上，所以 bsk/ 各处打出来的日志归属仍然正确。
+        # 若配置了 log_file_path，安全探针尝试创建文件，成功则用 TeeLogger 复合分流。
+        self._file_logger = None
+        self._plugin_logger = None
+        if self.settings.log_file_path:
+            self._file_logger = create_safe_file_logger(self.settings.log_file_path)
+            if self._file_logger is None:
+                astrbot_logger.warning(
+                    "[bsk_browser] 日志转存文件 %s 无写入权限或路径无效，已跳过文件转存。",
+                    self.settings.log_file_path,
+                )
+            else:
+                self._plugin_logger = TeeLogger(astrbot_logger, self._file_logger)
+
         self.service = BskService(
             self.settings,
             framework_tool_timeout=self.framework_tool_timeout,
-            logger=astrbot_logger,
+            logger=self._plugin_logger if self._plugin_logger is not None else astrbot_logger,
         )
 
         self._reap_task: asyncio.Task[None] | None = None
@@ -756,6 +775,13 @@ class BskBrowserPlugin(Star):
             astrbot_logger.info("[bsk_browser] 已关闭 %d 个浏览器会话。", closed)
         except Exception as exc:  # noqa: BLE001 - terminate 绝不能被异常打断
             astrbot_logger.warning("[bsk_browser] 关闭浏览器会话时出错（已忽略）：%r", exc)
+
+        if self._file_logger is not None:
+            try:
+                self._file_logger.close()
+            except Exception:
+                pass
+            self._file_logger = None
 
     async def _idle_reaper(self) -> None:
         """定期回收空闲过久的浏览器会话。

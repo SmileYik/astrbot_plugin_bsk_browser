@@ -174,6 +174,30 @@ class TestToolLogging(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[工具调用开始]", start_log)
         self.assertIn("[已截断", start_log)
 
+    async def test_file_logger_mounted_and_receives_tool_logs(self) -> None:
+        """测试配置 log_file_path 后，工具日志同步转存到指定文件并在 terminate 时关闭。"""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            log_file = Path(td) / "plugin.log"
+            plugin = BskBrowserPlugin(
+                make_context(),
+                config={
+                    "admin_only": False,
+                    "log_file_path": str(log_file),
+                },
+            )
+            plugin.service.list_sessions = MagicMock(return_value={"sessions": []})
+            self.assertIsNotNone(plugin._file_logger)
+
+            await plugin.bsk_session(self.event, action="list")
+            await plugin.terminate()
+
+            self.assertIsNone(plugin._file_logger)
+            content = log_file.read_text(encoding="utf-8")
+            self.assertIn("[工具调用开始]", content)
+            self.assertIn("工具: bsk_session", content)
+            self.assertIn("[工具调用结束]", content)
+
 
 if __name__ == "__main__":
     unittest.main()
