@@ -33,7 +33,7 @@ description: 控制 Chromium 浏览器进行自动化网页浏览、搜索、交
    - `wait`：仅等待页面加载完成（触发跳转后使用）。
 3. **`bsk_inspect`**：页面状态读取与截图（主要读取工具）
    - `observe`：智能大纲与元素列表读取。支持 `query="关键词"` 精准定位、`view="elements"|"text"|"outline"` 切换视图、`offset`/`limit` 切片分页。
-   - `screenshot`：截取页面图像并**直接将图片发送给用户**。支持 `full_page=True` 整页长截图，`ref="@eN"` 裁剪指定元素。
+   - `screenshot`：截取页面图像并**直接将图片发送给用户**（回执返回绝对文件路径）。支持 `full_page=True` 整页长截图，`ref="@eN"` 裁剪指定元素。
    - `snapshot`：获取不可变的静态可达性树。
    - `html`：获取页面或指定 `ref` 元素的原始 HTML（支持 `max_bytes`）。
    - `console`：读取控制台日志（支持 `since` 游标）。
@@ -56,16 +56,17 @@ description: 控制 Chromium 浏览器进行自动化网页浏览、搜索、交
 6. **`bsk_load_tools`**：按需加载调试工具（如 `debug`）。
 7. **`bsk_debug`**：高级网络与性能调试工具（按需加载）。
 8. **`bsk_assist`**：辅助与环境模拟（`resize` 调整窗口宽高、`emulate` 模拟环境）。
-9. **兼容工具**：
-   - `bsk_screenshot`：截图并直接发图给用户（建议优先使用 `bsk_inspect(action="screenshot")`）。
+9. **兼容旧工具**：
    - `bsk_close`：关闭当前会话。
+   - `bsk_status`：检查环境与连接状态。
+   - `bsk_logs`：增量读取控制台与网络日志。
 
 ## 浏览器通用操作与使用技巧
 
 ### 1. 新标签页感知与自主生命周期管理（重要）
 
 - **自动感知与切焦**：在点击搜索结果链接（通常带有 `target="_blank"`）时，插件底层会自动检测新打开的标签页，将操作焦点切换至新标签页，并在工具回执中显示：
-  `【检测到新标签页】... 标签 ID: 102 ... 【焦点已自动切换】`。
+  `【新标签页已打开并自动切换】已自动切到新标签页 id=...`。
 - **阅读完毕后自主关闭**：
   在阅读完新标签页的内容后，**必须自主调用 `bsk_tabs(action="close", tab_id=...)` 关闭该标签页**。
   关闭后系统会自动切回上一标签页，无需手动查找上一标签页 ID。
@@ -84,7 +85,7 @@ description: 控制 Chromium 浏览器进行自动化网页浏览、搜索、交
 ### 3. 截图与图像交付（已集成智能压缩防爆）
 
 - **截取当前屏幕并发送给用户**：
-  调用 `bsk_inspect(action="screenshot")`。
+  调用 `bsk_inspect(action="screenshot")`。图片将直接以消息形式发送给用户，同时回执会返回该图片的**绝对路径**。
 - **长页面全屏截图**：
   传 `full_page=True`：`bsk_inspect(action="screenshot", full_page=True)`。
   插件底层内置了自适应图像压缩流水线（JPEG 渐进压缩 + 智能尺寸钳位与体积控制在 1MB 内），既保证高清晰度，又彻底避免 QQ/OneBot 协议单帧上限导致的图片发送失败或破损。可放心使用长截图。
