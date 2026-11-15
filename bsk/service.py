@@ -2699,7 +2699,16 @@ class BskService:
         except BskError as exc:
             reason = getattr(exc, "reason", "")
             effect_state = getattr(exc, "effect_state", "")
-            if reason in ("cooperation_sync_required", "observation_required", "control_context_invalid") and effect_state != "unknown":
+            if (
+                reason
+                in (
+                    "cooperation_sync_required",
+                    "observation_required",
+                    "control_context_invalid",
+                    "observation_changed",
+                )
+                and effect_state != "unknown"
+            ):
                 self._logger.info("检测到页面控制上下文或观察令牌需同步 (%s)，执行 sync_session 补救", reason)
                 obs = await self.sync_session(session_key, tab_id=tab_id)
                 auto_synced = True
@@ -2740,7 +2749,16 @@ class BskService:
                 try:
                     await _run_scroll()
                 except BskError as scroll_exc:
-                    if getattr(scroll_exc, "reason", "") in ("cooperation_sync_required", "observation_required", "control_context_invalid") and getattr(scroll_exc, "effect_state", "") != "unknown":
+                    if (
+                        getattr(scroll_exc, "reason", "")
+                        in (
+                            "cooperation_sync_required",
+                            "observation_required",
+                            "control_context_invalid",
+                            "observation_changed",
+                        )
+                        and getattr(scroll_exc, "effect_state", "") != "unknown"
+                    ):
                         self._logger.info("scroll-to 遇到控制上下文或令牌需同步，执行 sync_session 补救")
                         obs = await self.sync_session(session_key, tab_id=tab_id)
                         auto_synced = True
@@ -2766,6 +2784,9 @@ class BskService:
                 auto_scrolled = True
             else:
                 raise
+
+        if action in ("click", "fill", "press", "select", "drag", "upload"):
+            self._session_observations.pop(session_key, None)
 
         out: dict[str, Any] = {
             "session": self._session_field(session_key),
@@ -3332,7 +3353,13 @@ class BskService:
             effect_state = getattr(exc, "effect_state", "")
             if (
                 use_full_page
-                and reason in ("cooperation_sync_required", "observation_required", "control_context_invalid")
+                and reason
+                in (
+                    "cooperation_sync_required",
+                    "observation_required",
+                    "control_context_invalid",
+                    "observation_changed",
+                )
                 and effect_state != "unknown"
             ):
                 self._logger.info("全页截图遇到控制上下文或令牌需同步 (%s)，执行 sync_session 补救", reason)
