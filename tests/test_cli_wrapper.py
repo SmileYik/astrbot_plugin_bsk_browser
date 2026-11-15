@@ -196,3 +196,98 @@ def test_service_uses_cli():
         assert status_info.get("daemon", {}).get("version") == "0.5.0"
         runner.run_or_raise.assert_any_await(["status", "--json"], timeout=5.0)
     asyncio.run(_test())
+
+
+def test_cli_navigate_builds_correct_args():
+    async def _test():
+        runner = MagicMock()
+        runner.run = AsyncMock(return_value=_mock_result())
+        cli = BskCli(runner)
+        await cli.navigate(
+            "sess1",
+            "https://example.com",
+            observation="obs-1",
+            wait_until="networkidle",
+            timeout_ms=10000,
+            tab_id=2,
+            timeout=45.0,
+        )
+        runner.run.assert_awaited_once_with(
+            [
+                "navigate",
+                "https://example.com",
+                "--observation",
+                "obs-1",
+                "--wait-until",
+                "networkidle",
+                "--timeout",
+                "10s",
+                "--tab-id",
+                "2",
+                "--session",
+                "sess1",
+                "--json",
+            ],
+            timeout=45.0,
+        )
+    asyncio.run(_test())
+
+
+def test_cli_reload_and_wait_for_navigation():
+    async def _test():
+        runner = MagicMock()
+        runner.run = AsyncMock(return_value=_mock_result())
+        cli = BskCli(runner)
+        await cli.reload("sess1", hard=True, wait_until="load", timeout_ms=5000, tab_id=3, timeout=15.0)
+        runner.run.assert_awaited_once_with(
+            ["reload", "--hard", "--timeout", "5s", "--tab-id", "3", "--session", "sess1", "--json"],
+            timeout=15.0,
+        )
+
+        runner.run.reset_mock()
+        await cli.wait_for_navigation("sess1", wait_until="commit", timeout_ms=20000, tab_id=1, timeout=35.0)
+        runner.run.assert_awaited_once_with(
+            ["wait-for-navigation", "--wait-until", "commit", "--timeout", "20s", "--tab-id", "1", "--session", "sess1", "--json"],
+            timeout=35.0,
+        )
+    asyncio.run(_test())
+
+
+def test_cli_observe_snapshot_get_html_evaluate():
+    async def _test():
+        runner = MagicMock()
+        runner.run = AsyncMock(return_value=_mock_result())
+        cli = BskCli(runner)
+
+        # observe
+        await cli.observe("sess1", cursor="cur1", max_depth=5, max_tokens=2000, probe_hover=True, debug_surfaces=True, tab_id=1)
+        runner.run.assert_awaited_once_with(
+            ["observe", "--cursor", "cur1", "--max-depth", "5", "--max-tokens", "2000", "--probe-hover", "--debug-surfaces", "--tab-id", "1", "--session", "sess1", "--json"],
+            timeout=15.0,
+        )
+
+        # snapshot
+        runner.run.reset_mock()
+        await cli.snapshot("sess1", max_depth=3, max_tokens=1000, tab_id=2)
+        runner.run.assert_awaited_once_with(
+            ["snapshot", "--max-depth", "3", "--max-tokens", "1000", "--tab-id", "2", "--session", "sess1", "--json"],
+            timeout=15.0,
+        )
+
+        # get_html
+        runner.run.reset_mock()
+        await cli.get_html("sess1", ref="@e1", max_bytes=1024, tab_id=2)
+        runner.run.assert_awaited_once_with(
+            ["get-html", "--max-bytes", "1024", "--ref", "@e1", "--tab-id", "2", "--session", "sess1", "--json"],
+            timeout=15.0,
+        )
+
+        # evaluate
+        runner.run.reset_mock()
+        await cli.evaluate("sess1", "1 + 1", timeout_ms=5000, tab_id=1)
+        runner.run.assert_awaited_once_with(
+            ["evaluate", "1 + 1", "--timeout", "5s", "--tab-id", "1", "--session", "sess1", "--json"],
+            timeout=45.0,
+        )
+    asyncio.run(_test())
+

@@ -557,3 +557,315 @@ class BskCli:
         return await self._execute(
             params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
         )
+
+    # =========================================================================
+    # 导航与页面控制 (Navigation Commands)
+    # =========================================================================
+
+    async def navigate(
+        self,
+        session: str,
+        target: str,
+        *,
+        observation: str | None = None,
+        wait_until: str = "load",
+        timeout_ms: int | None = None,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 45.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """导航到指定 URL 或历史方向（back/forward）。
+
+        Args:
+            session: 浏览器会话标识 (Session ID)。
+            target: 目标 URL 或历史方向 ('back' / 'forward')。
+            observation: 协同凭证 observation_id（可选）。
+            wait_until: 等待生命周期状态（'load' / 'commit' / 'domcontentloaded' / 'networkidle'，默认 'load'）。
+            timeout_ms: bsk 内部硬超时毫秒数（可选）。
+            tab_id: 目标标签页 ID（可选）。
+            json: 是否输出 JSON 格式（默认 True）。
+            timeout: 命令超时时间（秒，默认 45.0）。
+            raise_on_error: 失败时是否抛出异常（默认 False）。
+
+        Returns:
+            BskResult 执行结果。
+        """
+        params = ["navigate", str(target)]
+        if observation:
+            params.extend(["--observation", str(observation)])
+        if wait_until and wait_until != "load":
+            params.extend(["--wait-until", str(wait_until)])
+        if timeout_ms is not None:
+            params.extend(["--timeout", format_duration(timeout_ms)])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def reload(
+        self,
+        session: str,
+        *,
+        hard: bool = False,
+        wait_until: str = "load",
+        timeout_ms: int | None = None,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 15.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """刷新当前激活的标签页。
+
+        Args:
+            session: 浏览器会话标识 (Session ID)。
+            hard: 是否绕过缓存硬刷新（默认 False）。
+            wait_until: 等待生命周期状态（默认 'load'）。
+            timeout_ms: bsk 内部硬超时毫秒数（可选）。
+            tab_id: 目标标签页 ID（可选）。
+            json: 是否输出 JSON 格式（默认 True）。
+            timeout: 命令超时时间（秒，默认 15.0）。
+            raise_on_error: 失败时是否抛出异常（默认 False）。
+
+        Returns:
+            BskResult 执行结果。
+        """
+        params = ["reload"]
+        if hard:
+            params.append("--hard")
+        if wait_until and wait_until != "load":
+            params.extend(["--wait-until", str(wait_until)])
+        if timeout_ms is not None:
+            params.extend(["--timeout", format_duration(timeout_ms)])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def wait_for_navigation(
+        self,
+        session: str,
+        *,
+        wait_until: str = "load",
+        timeout_ms: int = 30000,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 35.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """等待页面生命周期事件。
+
+        Args:
+            session: 浏览器会话标识 (Session ID)。
+            wait_until: 等待生命周期状态（默认 'load'）。
+            timeout_ms: bsk 内部硬超时毫秒数（默认 30000）。
+            tab_id: 目标标签页 ID（可选）。
+            json: 是否输出 JSON 格式（默认 True）。
+            timeout: 命令超时时间（秒，默认 35.0）。
+            raise_on_error: 失败时是否抛出异常（默认 False）。
+
+        Returns:
+            BskResult 执行结果。
+        """
+        params = ["wait-for-navigation"]
+        if wait_until and wait_until != "load":
+            params.extend(["--wait-until", str(wait_until)])
+        if timeout_ms is not None:
+            params.extend(["--timeout", format_duration(timeout_ms)])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    # =========================================================================
+    # 观察与 DOM 检查 (Observe & Inspection Commands)
+    # =========================================================================
+
+    async def observe(
+        self,
+        session: str,
+        *,
+        cursor: str = "",
+        max_depth: int | None = None,
+        max_tokens: int | None = None,
+        probe_hover: bool = False,
+        debug_surfaces: bool = False,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 15.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """读取当前页面的语义结构 (VOM)。
+
+        Args:
+            session: 浏览器会话标识 (Session ID)。
+            cursor: 分页游标（可选）。
+            max_depth: 最大 DOM 深度（可选）。
+            max_tokens: 最大 token 数（可选）。
+            probe_hover: 是否探测 hover 状态（默认 False）。
+            debug_surfaces: 是否开启 surface 调试信息（默认 False）。
+            tab_id: 目标标签页 ID（可选）。
+            json: 是否输出 JSON 格式（默认 True）。
+            timeout: 命令超时时间（秒，默认 15.0）。
+            raise_on_error: 失败时是否抛出异常（默认 False）。
+
+        Returns:
+            BskResult 执行结果。
+        """
+        params = ["observe"]
+        if cursor:
+            params.extend(["--cursor", str(cursor)])
+        if max_depth is not None:
+            params.extend(["--max-depth", str(int(max_depth))])
+        if max_tokens is not None:
+            params.extend(["--max-tokens", str(int(max_tokens))])
+        if probe_hover:
+            params.append("--probe-hover")
+        if debug_surfaces:
+            params.append("--debug-surfaces")
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def snapshot(
+        self,
+        session: str,
+        *,
+        max_depth: int | None = None,
+        max_tokens: int | None = None,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 15.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """生成带 @eN 引用的纯 aria-snapshot 快照。
+
+        Args:
+            session: 浏览器会话标识 (Session ID)。
+            max_depth: 最大 DOM 深度（可选）。
+            max_tokens: 最大 token 数（可选）。
+            tab_id: 目标标签页 ID（可选）。
+            json: 是否输出 JSON 格式（默认 True）。
+            timeout: 命令超时时间（秒，默认 15.0）。
+            raise_on_error: 失败时是否抛出异常（默认 False）。
+
+        Returns:
+            BskResult 执行结果。
+        """
+        params = ["snapshot"]
+        if max_depth is not None:
+            params.extend(["--max-depth", str(int(max_depth))])
+        if max_tokens is not None:
+            params.extend(["--max-tokens", str(int(max_tokens))])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def get_html(
+        self,
+        session: str,
+        *,
+        ref: str = "",
+        max_bytes: int = 524288,
+        out: str | None = None,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 15.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """导出页面或指定元素的原始 HTML。
+
+        Args:
+            session: 浏览器会话标识 (Session ID)。
+            ref: 目标元素引用（如 @e1，可选）。
+            max_bytes: 最大字节数（默认 524288）。
+            out: 输出文件路径（可选）。
+            tab_id: 目标标签页 ID（可选）。
+            json: 是否输出 JSON 格式（默认 True）。
+            timeout: 命令超时时间（秒，默认 15.0）。
+            raise_on_error: 失败时是否抛出异常（默认 False）。
+
+        Returns:
+            BskResult 执行结果。
+        """
+        params = ["get-html", "--max-bytes", str(int(max_bytes))]
+        if ref:
+            params.extend(["--ref", str(ref)])
+        if out:
+            params.extend(["--out", str(out)])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def evaluate(
+        self,
+        session: str,
+        expression: str,
+        *,
+        timeout_ms: int | None = None,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 45.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """在页面上下文中执行任意 JavaScript 脚本。
+
+        Args:
+            session: 浏览器会话标识 (Session ID)。
+            expression: 要执行的 JavaScript 表达式。
+            timeout_ms: bsk 内部硬超时毫秒数（可选）。
+            tab_id: 目标标签页 ID（可选）。
+            json: 是否输出 JSON 格式（默认 True）。
+            timeout: 命令超时时间（秒，默认 45.0）。
+            raise_on_error: 失败时是否抛出异常（默认 False）。
+
+        Returns:
+            BskResult 执行结果。
+        """
+        params = ["evaluate", str(expression)]
+        if timeout_ms is not None:
+            params.extend(["--timeout", format_duration(timeout_ms)])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+
+def format_duration(milliseconds: int | float) -> str:
+    """把毫秒数转成 bsk 接受的 duration 字符串（例如 1000 -> '1s'）。"""
+    ms = int(milliseconds)
+    if ms % 1000 == 0:
+        return f"{ms // 1000}s"
+    return f"{ms}ms"
+
