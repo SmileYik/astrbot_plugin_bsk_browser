@@ -56,6 +56,7 @@ __all__ = [
     "make_shot_path",
     "sanitize_session_id",
     "sniff_format",
+    "truncate_image_height",
     "verify_shot",
 ]
 
@@ -551,4 +552,41 @@ def compress_and_optimize_image(
             except OSError:
                 pass
         return orig_path
+
+
+def truncate_image_height(path: str | Path, max_height: int) -> tuple[Path, bool]:
+    """若图片高度超过 max_height，垂直截断多余部分并覆写保存。
+
+    Args:
+        path: 截图文件路径。
+        max_height: 允许的最大高度（像素），<= 0 表示不限制。
+
+    Returns:
+        ``(处理后的路径, 是否发生了截断)``。
+    """
+    orig_path = Path(path)
+    if max_height <= 0 or not orig_path.is_file():
+        return orig_path, False
+
+    try:
+        from PIL import Image
+    except ImportError:
+        return orig_path, False
+
+    try:
+        with Image.open(orig_path) as image:
+            width, height = image.size
+            if height <= max_height:
+                return orig_path, False
+
+            box = (0, 0, width, max_height)
+            cropped = image.crop(box)
+            fmt = image.format or (
+                "PNG" if orig_path.suffix.lower() == ".png" else "JPEG"
+            )
+            cropped.save(orig_path, format=fmt)
+            return orig_path, True
+    except Exception:
+        return orig_path, False
+
 

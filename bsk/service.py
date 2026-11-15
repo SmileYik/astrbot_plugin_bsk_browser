@@ -53,8 +53,10 @@ from .shots import (
     cleanup_shots,
     compress_and_optimize_image,
     make_shot_path,
+    truncate_image_height,
     verify_shot,
 )
+
 
 __all__ = ["BskService", "ActionResult", "ShotPayload"]
 
@@ -3550,6 +3552,8 @@ class BskService:
             argv += ["--ref", ref]
         if use_full_page:
             argv.append("--full-page")
+            scope = getattr(self.settings, "fullpage_scope", "current") or "current"
+            argv.extend(["--scope", scope])
             token = str(observation or "").strip() or self._session_observations.pop(session_key, None)
             if token:
                 argv.extend(["--observation", token])
@@ -3586,6 +3590,8 @@ class BskService:
                 if ref:
                     retry_argv += ["--ref", ref]
                 retry_argv.append("--full-page")
+                scope = getattr(self.settings, "fullpage_scope", "current") or "current"
+                retry_argv.extend(["--scope", scope])
                 retry_argv.extend(["--observation", obs.observation_id])
                 self._session_observations.pop(session_key, None)
                 result = await _run_shot(retry_argv)
@@ -3603,19 +3609,42 @@ class BskService:
         ok, reason = verify_shot(shot)
         warning = "" if ok else f"截图可能不完整：{reason}"
 
-        # 压缩优化流水线（将超大 PNG / 长截图转为安全体积的 JPEG，杜绝网络传输截断）
         if ok and shot.path:
-            opt_path = compress_and_optimize_image(shot.path)
-            if opt_path != Path(shot.path) and opt_path.is_file():
-                shot.path = str(opt_path)
-                shot.byte_size = opt_path.stat().st_size
-                try:
-                    from PIL import Image
+            # 1. 超长高度自动截断保护（防止生成数十 MB 超大图）
+            max_height = int(getattr(self.settings, "fullpage_max_height", 8000) or 0)
+            if use_full_page and max_height > 0:
+                t_path, did_truncate = truncate_image_height(shot.path, max_height)
+                if did_truncate:
+                    shot.path = str(t_path)
+                    try:
+                        shot.byte_size = Path(t_path).stat().st_size
+                    except Exception:
+                        pass
+                    shot.height = max_height
+                    trunc_msg = f"（已按配置截断至最大高度 {max_height}px）"
+                    warning = f"{warning} {trunc_msg}".strip()
 
-                    with Image.open(opt_path) as im:
-                        shot.width, shot.height = im.size
-                except Exception:
-                    pass
+
+            # 2. 按需压缩为 JPEG（默认关闭，保持原图直发）
+            compress_to_jpg = bool(
+                getattr(self.settings, "screenshot_compress_to_jpg", False)
+            )
+            if compress_to_jpg:
+                quality = int(
+                    getattr(self.settings, "screenshot_quality", 85) or 85
+                )
+                opt_path = compress_and_optimize_image(shot.path, quality=quality)
+                if opt_path != Path(shot.path) and opt_path.is_file():
+                    shot.path = str(opt_path)
+                    shot.byte_size = opt_path.stat().st_size
+                    try:
+                        from PIL import Image
+
+                        with Image.open(opt_path) as im:
+                            shot.width, shot.height = im.size
+                    except Exception:
+                        pass
+
 
         # 顺手清理旧图，避免磁盘无限增长（失败不影响主流程）。
         try:

@@ -122,3 +122,27 @@ class TestScreenshotResilience(unittest.IsolatedAsyncioTestCase):
         self.assertIn("--observation", executed_argv[1])
         idx2 = executed_argv[1].index("--observation")
         self.assertEqual(executed_argv[1][idx2 + 1], "obs-explicit")
+
+    @patch("astrbot_plugin_bsk_browser.bsk.service.cleanup_shots", return_value=0)
+    @patch("astrbot_plugin_bsk_browser.bsk.service.verify_shot", return_value=(True, ""))
+    @patch("astrbot_plugin_bsk_browser.bsk.service.truncate_image_height", return_value=("/tmp/test_shots/shot_trunc.png", True))
+    async def test_screenshot_ex_truncation_warning(self, mock_truncate, _mock_verify, _mock_cleanup) -> None:
+        self.settings.fullpage_max_height = 5000
+        self.settings.screenshot_compress_to_jpg = False
+        service = BskService(settings=self.settings, runner=MagicMock())
+        service.sessions = MagicMock()
+
+        async def mock_execute(key, builder, **kwargs):
+            return BskResult(
+                ok=True,
+                exit_code=0,
+                stdout="",
+                stderr="",
+                data={"path": "/tmp/test_shots/shot.png", "width": 800, "height": 10000, "byte_size": 2048},
+            )
+
+        service.sessions.execute = mock_execute
+        res = await service.screenshot_ex("s1", full_page=True)
+        self.assertIn("已按配置截断至最大高度 5000px", res.warning)
+        self.assertEqual(res.height, 5000)
+

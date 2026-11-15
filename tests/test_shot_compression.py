@@ -41,3 +41,36 @@ def test_compress_rgba_white_background(tmp_path: Path):
         assert opt_img.mode == "RGB"
         # 采样左上角像素，应为白色底 (255, 255, 255)
         assert opt_img.getpixel((0, 0)) == (255, 255, 255)
+
+
+def test_truncate_image_height_when_exceeding(tmp_path: Path):
+    from bsk.shots import truncate_image_height
+
+    img_path = tmp_path / "tall.png"
+    Image.new("RGB", (800, 10000), color=(255, 0, 0)).save(img_path)
+    truncated_path, did_truncate = truncate_image_height(img_path, max_height=6000)
+    assert did_truncate is True
+    with Image.open(truncated_path) as im:
+        assert im.size == (800, 6000)
+
+
+def test_truncate_image_height_when_under_limit(tmp_path: Path):
+    from bsk.shots import truncate_image_height
+
+    img_path = tmp_path / "short.png"
+    Image.new("RGB", (800, 3000), color=(0, 255, 0)).save(img_path)
+    truncated_path, did_truncate = truncate_image_height(img_path, max_height=6000)
+    assert did_truncate is False
+    with Image.open(truncated_path) as im:
+        assert im.size == (800, 3000)
+
+
+def test_truncate_image_height_zero_or_negative(tmp_path: Path):
+    from bsk.shots import truncate_image_height
+
+    img_path = tmp_path / "normal.png"
+    Image.new("RGB", (800, 3000), color=(0, 0, 255)).save(img_path)
+    truncated_path, did_truncate = truncate_image_height(img_path, max_height=0)
+    assert did_truncate is False
+    assert truncated_path == img_path
+
