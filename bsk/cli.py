@@ -17,7 +17,7 @@ class BskCli:
     """bsk 命令行接口的强类型语义化包装客户端。
 
     所有方法均封装对底层 ``BskRunner`` 的调度执行，支持完整的参数类型注解、
-    默认参数规范以及高阶业务流程（例如安全关闭标签页）。
+    默认参数规范、可选的异常抛出控制（``raise_on_error``），以及高阶业务流程（例如安全关闭标签页）。
     """
 
     def __init__(self, runner: BskRunner) -> None:
@@ -27,6 +27,35 @@ class BskCli:
             runner: 底层 BskRunner 子进程执行器实例。
         """
         self._runner = runner
+
+    async def _execute(
+        self,
+        args: list[str],
+        *,
+        timeout: float,
+        raise_on_error: bool = False,
+        expect_json: bool = True,
+    ) -> BskResult:
+        """统一底层执行分发器。
+
+        Args:
+            args: CLI 参数列表。
+            timeout: 超时时间（秒）。
+            raise_on_error: 是否在非零退出码或错误时抛出 BskError 系列异常（默认 False）。
+            expect_json: 是否期望 JSON 解析（默认 True）。
+
+        Returns:
+            BskResult 执行结果。
+        """
+        if raise_on_error:
+            if not expect_json:
+                return await self._runner.run_or_raise(
+                    args, timeout=timeout, expect_json=False
+                )
+            return await self._runner.run_or_raise(args, timeout=timeout)
+        if not expect_json:
+            return await self._runner.run(args, timeout=timeout, expect_json=False)
+        return await self._runner.run(args, timeout=timeout)
 
     # =========================================================================
     # 标签管理 (Tab Commands)
@@ -39,6 +68,7 @@ class BskCli:
         *,
         json: bool = True,
         timeout: float = 5.0,
+        raise_on_error: bool = False,
     ) -> BskResult:
         """激活并聚焦指定的标签页。
 
@@ -47,6 +77,7 @@ class BskCli:
             tab_id: 目标标签页 ID (必填)。
             json: 是否输出 JSON 格式（默认 True）。
             timeout: 命令超时时间（秒，默认 5.0）。
+            raise_on_error: 失败时是否抛出异常（默认 False）。
 
         Returns:
             BskResult 执行结果。
@@ -54,7 +85,9 @@ class BskCli:
         params = ["tab", "select", str(tab_id), "--session", str(session)]
         if json:
             params.append("--json")
-        return await self._runner.run(params, timeout=timeout)
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
 
     async def sync_tab(
         self,
@@ -63,6 +96,7 @@ class BskCli:
         *,
         json: bool = True,
         timeout: float = 5.0,
+        raise_on_error: bool = False,
     ) -> BskResult:
         """同步指定标签页（或当前激活标签页）的 VOM 快照与协同控制凭据。
 
@@ -71,6 +105,7 @@ class BskCli:
             tab_id: 目标标签页 ID（可选，默认为会话当前激活标签）。
             json: 是否输出 JSON 格式（默认 True）。
             timeout: 命令超时时间（秒，默认 5.0）。
+            raise_on_error: 失败时是否抛出异常（默认 False）。
 
         Returns:
             BskResult 包含 observation_id 与 context_id 的执行结果。
@@ -80,7 +115,9 @@ class BskCli:
             params.extend(["--tab-id", str(tab_id)])
         if json:
             params.append("--json")
-        return await self._runner.run(params, timeout=timeout)
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
 
     async def close_tab(
         self,
@@ -91,6 +128,7 @@ class BskCli:
         context: str | None = None,
         json: bool = True,
         timeout: float = 5.0,
+        raise_on_error: bool = False,
     ) -> BskResult:
         """关闭指定的标签页。
 
@@ -101,6 +139,7 @@ class BskCli:
             context: 来自 sync 响应的 context_id 凭据（可选）。
             json: 是否输出 JSON 格式（默认 True）。
             timeout: 命令超时时间（秒，默认 5.0）。
+            raise_on_error: 失败时是否抛出异常（默认 False）。
 
         Returns:
             BskResult 执行结果。
@@ -112,7 +151,9 @@ class BskCli:
             params.extend(["--context", str(context)])
         if json:
             params.append("--json")
-        return await self._runner.run(params, timeout=timeout)
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
 
     async def close_tab_safe(
         self,
@@ -171,7 +212,6 @@ class BskCli:
             timeout=timeout,
         )
 
-
     async def list_tabs(
         self,
         session: str | None = None,
@@ -179,6 +219,7 @@ class BskCli:
         scope: str = "agent",
         json: bool = True,
         timeout: float = 5.0,
+        raise_on_error: bool = False,
     ) -> BskResult:
         """列出指定范围或会话中的标签页列表。
 
@@ -187,6 +228,7 @@ class BskCli:
             scope: 范围限定，如 'agent' 或 'user'（默认 'agent'）。
             json: 是否输出 JSON 格式（默认 True）。
             timeout: 命令超时时间（秒，默认 5.0）。
+            raise_on_error: 失败时是否抛出异常（默认 False）。
 
         Returns:
             BskResult 包含 tabs 列表的执行结果。
@@ -196,7 +238,9 @@ class BskCli:
             params.extend(["--session", str(session)])
         if json:
             params.append("--json")
-        return await self._runner.run(params, timeout=timeout)
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
 
     async def create_tab(
         self,
@@ -206,6 +250,7 @@ class BskCli:
         active: bool = True,
         json: bool = True,
         timeout: float = 5.0,
+        raise_on_error: bool = False,
     ) -> BskResult:
         """在 Agent Window 中创建新标签页。
 
@@ -215,6 +260,7 @@ class BskCli:
             active: 是否自动激活新标签页（默认 True；为 False 时传 --no-active 作为后台标签打开）。
             json: 是否输出 JSON 格式（默认 True）。
             timeout: 命令超时时间（秒，默认 5.0）。
+            raise_on_error: 失败时是否抛出异常（默认 False）。
 
         Returns:
             BskResult 执行结果，包含新建的 tab_id。
@@ -226,7 +272,9 @@ class BskCli:
             params.append("--no-active")
         if json:
             params.append("--json")
-        return await self._runner.run(params, timeout=timeout)
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
 
     async def borrow_tab(
         self,
@@ -235,6 +283,7 @@ class BskCli:
         *,
         json: bool = True,
         timeout: float = 5.0,
+        raise_on_error: bool = False,
     ) -> BskResult:
         """将用户标签页借入 Agent Window。
 
@@ -243,6 +292,7 @@ class BskCli:
             tab_id: 要借入的用户标签页 ID (必填)。
             json: 是否输出 JSON 格式（默认 True）。
             timeout: 命令超时时间（秒，默认 5.0）。
+            raise_on_error: 失败时是否抛出异常（默认 False）。
 
         Returns:
             BskResult 执行结果。
@@ -250,7 +300,9 @@ class BskCli:
         params = ["tab", "borrow", str(tab_id), "--session", str(session)]
         if json:
             params.append("--json")
-        return await self._runner.run(params, timeout=timeout)
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
 
     async def return_tab(
         self,
@@ -259,6 +311,7 @@ class BskCli:
         *,
         json: bool = True,
         timeout: float = 5.0,
+        raise_on_error: bool = False,
     ) -> BskResult:
         """将借入的标签页归还至用户窗口。
 
@@ -267,6 +320,7 @@ class BskCli:
             tab_id: 要归还的标签页 ID (必填)。
             json: 是否输出 JSON 格式（默认 True）。
             timeout: 命令超时时间（秒，默认 5.0）。
+            raise_on_error: 失败时是否抛出异常（默认 False）。
 
         Returns:
             BskResult 执行结果。
@@ -274,7 +328,9 @@ class BskCli:
         params = ["tab", "return", str(tab_id), "--session", str(session)]
         if json:
             params.append("--json")
-        return await self._runner.run(params, timeout=timeout)
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
 
     # =========================================================================
     # 会话管理 (Session Commands)
@@ -285,12 +341,14 @@ class BskCli:
         *,
         json: bool = True,
         timeout: float = 10.0,
+        raise_on_error: bool = False,
     ) -> BskResult:
         """列出当前所有活跃的浏览器会话。
 
         Args:
             json: 是否输出 JSON 格式（默认 True）。
             timeout: 命令超时时间（秒，默认 10.0）。
+            raise_on_error: 失败时是否抛出异常（默认 False）。
 
         Returns:
             BskResult 包含 sessions 列表的执行结果。
@@ -298,41 +356,63 @@ class BskCli:
         params = ["session", "list"]
         if json:
             params.append("--json")
-        return await self._runner.run(params, timeout=timeout)
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
 
     async def start_session(
         self,
         session_id: str | None = None,
         *,
+        browser_id: str | None = None,
+        request_id: str | None = None,
         headless: bool | None = None,
         incognito: bool | None = None,
+        focus: bool = True,
+        extra_args: list[str] | None = None,
         json: bool = True,
         timeout: float = 30.0,
+        raise_on_error: bool = False,
     ) -> BskResult:
         """创建并启动一个新的浏览器会话。
 
         Args:
             session_id: 自定义会话 ID（可选，None 时由 bsk 自动生成）。
+            browser_id: 目标浏览器实例 ID（可选）。
+            request_id: 可恢复启动令牌 ID（可选）。
             headless: 是否无头运行（可选）。
             incognito: 是否开启无痕模式（可选）。
+            focus: 是否激活窗口焦点（默认 True；为 False 时传递 --no-focus）。
+            extra_args: 额外的命令行参数列表（可选）。
             json: 是否输出 JSON 格式（默认 True）。
             timeout: 启动超时时间（秒，默认 30.0）。
+            raise_on_error: 失败时是否抛出异常（默认 False）。
 
         Returns:
             BskResult 执行结果。
         """
         params = ["session", "start"]
+        if not focus:
+            params.append("--no-focus")
         if session_id:
             params.extend(["--session", str(session_id)])
+        if browser_id:
+            params.extend(["--browser", str(browser_id)])
         if headless is True:
             params.append("--headless")
         elif headless is False:
             params.append("--no-headless")
         if incognito is True:
             params.append("--incognito")
+        if extra_args:
+            params.extend([str(item) for item in extra_args])
+        if request_id:
+            params.extend(["--request-id", str(request_id)])
         if json:
             params.append("--json")
-        return await self._runner.run(params, timeout=timeout)
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
 
     async def stop_session(
         self,
@@ -340,6 +420,7 @@ class BskCli:
         *,
         json: bool = False,
         timeout: float = 15.0,
+        raise_on_error: bool = False,
     ) -> BskResult:
         """停止指定的浏览器会话并回收其 Agent Window。
 
@@ -347,6 +428,7 @@ class BskCli:
             session_id: 待停止的会话 ID (必填)。
             json: 是否输出 JSON 格式（默认 False）。
             timeout: 停止超时时间（秒，默认 15.0）。
+            raise_on_error: 失败时是否抛出异常（默认 False）。
 
         Returns:
             BskResult 执行结果。
@@ -354,7 +436,48 @@ class BskCli:
         params = ["session", "stop", str(session_id)]
         if json:
             params.append("--json")
-        return await self._runner.run(params, timeout=timeout)
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def request_probe(
+        self,
+        *,
+        timeout: float = 2.0,
+    ) -> BskResult:
+        """探测 bsk 是否支持 session request 子命令协议。
+
+        Args:
+            timeout: 超时时间（秒，默认 2.0）。
+
+        Returns:
+            BskResult 执行结果。
+        """
+        params = ["session", "request", "--help"]
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=True, expect_json=False
+        )
+
+    async def request_command(
+        self,
+        args: list[str],
+        *,
+        timeout: float = 10.0,
+        raise_on_error: bool = True,
+    ) -> BskResult:
+        """执行 session request 相关生命周期协议命令。
+
+        Args:
+            args: 完整参数列表（如 ['session', 'request', ...]）。
+            timeout: 超时时间（秒，默认 10.0）。
+            raise_on_error: 失败时是否抛出异常（默认 True）。
+
+        Returns:
+            BskResult 执行结果。
+        """
+        return await self._execute(
+            args, timeout=timeout, raise_on_error=raise_on_error, expect_json=True
+        )
 
     # =========================================================================
     # 系统与诊断 (System Commands)
@@ -365,12 +488,14 @@ class BskCli:
         *,
         json: bool = True,
         timeout: float = 5.0,
+        raise_on_error: bool = False,
     ) -> BskResult:
         """获取 bsk 可执行文件的版本信息。
 
         Args:
             json: 是否输出 JSON 格式（默认 True）。
             timeout: 超时时间（秒，默认 5.0）。
+            raise_on_error: 失败时是否抛出异常（默认 False）。
 
         Returns:
             BskResult 包含 version 信息的执行结果。
@@ -378,19 +503,23 @@ class BskCli:
         params = ["version"]
         if json:
             params.append("--json")
-        return await self._runner.run(params, timeout=timeout)
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
 
     async def get_status(
         self,
         *,
         json: bool = True,
         timeout: float = 10.0,
+        raise_on_error: bool = False,
     ) -> BskResult:
         """获取 bsk 守护进程及浏览器连接状态。
 
         Args:
             json: 是否输出 JSON 格式（默认 True）。
             timeout: 超时时间（秒，默认 10.0）。
+            raise_on_error: 失败时是否抛出异常（默认 False）。
 
         Returns:
             BskResult 包含守护进程诊断状态的执行结果。
@@ -398,4 +527,6 @@ class BskCli:
         params = ["status"]
         if json:
             params.append("--json")
-        return await self._runner.run(params, timeout=timeout)
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )

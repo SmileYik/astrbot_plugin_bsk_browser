@@ -569,6 +569,13 @@ class SessionManager:
         logger: LoggerLike | None = None,
     ) -> None:
         self._runner = runner
+        from .cli import BskCli
+
+        cli = getattr(runner, "cli", None)
+        if not isinstance(cli, BskCli):
+            self._cli = BskCli(runner)
+        else:
+            self._cli = cli
         self._browser_probe = browser_probe
         self._journal = journal
         self._logger = logger or NULL_LOGGER
@@ -1125,8 +1132,8 @@ class SessionManager:
             BskError: daemon 没在跑或命令失败。调用方会把"失败"当成
                 "没有遗留会话"处理。
         """
-        result = await self._runner.run_or_raise(
-            ["session", "list", "--json"], timeout=RECOVER_LIST_TIMEOUT_SEC
+        result = await self._cli.list_sessions(
+            timeout=RECOVER_LIST_TIMEOUT_SEC, raise_on_error=True
         )
         raw = result.data
         mapping: dict[str, set[int]] = {}
@@ -1422,21 +1429,16 @@ class SessionManager:
             BskError: 启动失败，或返回里没有 session_id（协议异常）。
             BskStartCancelled: 这次启动已被取消（``code="cancelled"``）。
         """
-        args = ["session", "start", "--no-focus", "--json"]
         browser_id = await self._resolve_browser_instance()
-        if browser_id:
-            # 必须用 instance_id：实测 label 经常是空串，拿它选浏览器会选错。
-            args += ["--browser", browser_id]
-        if start_args:
-            # 放在最后：位置无关（clap 不介意），但让"固定参数 → 自动选出的
-            # 浏览器 → 调用方额外要求的参数"这个顺序在日志/报错里一眼可读。
-            args += [str(item) for item in start_args]
-        if request_id:
-            # 排在 start_args 之后：它由本模块自己生成并保管，不是调用方参数。
-            args += ["--request-id", request_id]
-
         try:
-            result = await self._runner.run_or_raise(args, timeout=self._start_timeout)
+            result = await self._cli.start_session(
+                browser_id=browser_id,
+                request_id=request_id,
+                focus=False,
+                extra_args=start_args,
+                timeout=self._start_timeout,
+                raise_on_error=True,
+            )
         except BskError as exc:
             # T6：cancelled 是"已按调用方的要求抑制"的成功语义，必须显式识别。
             #   重试会被同一条墓碑再次拒绝；回退到不带 --request-id 的普通 start
@@ -1527,11 +1529,7 @@ class SessionManager:
     async def _probe_request_protocol(self) -> bool:
         """真正跑一次能力探测。任何失败都只是"不支持"，绝不抛异常。"""
         try:
-            result = await self._runner.run_or_raise(
-                ["session", "request", "--help"],
-                timeout=REQUEST_PROBE_TIMEOUT_SEC,
-                expect_json=False,
-            )
+            result = await self._cli.request_probe(timeout=REQUEST_PROBE_TIMEOUT_SEC)
         except Exception as exc:  # noqa: BLE001 - 老 bsk 会以非零码拒绝，bsk 没装也会抛
             self._logger.debug("bsk 不支持 session request（能力探测失败）：%r", exc)
             return False
@@ -1542,8 +1540,8 @@ class SessionManager:
     ) -> dict[str, Any]:
         """跑一条 ``session request`` 命令并解析 JSON。失败抛 BskError。"""
         try:
-            result = await self._runner.run_or_raise(
-                args, timeout=REQUEST_PROTOCOL_TIMEOUT_SEC
+            result = await self._cli.request_command(
+                args, timeout=REQUEST_PROTOCOL_TIMEOUT_SEC, raise_on_error=True
             )
         except BskSessionGone as exc:
             # 令牌不存在（实测退出码 1）。绝不能让 BskSessionGone 冒到 execute() 的
@@ -1719,40 +1717,28 @@ class SessionManager:
         if not entry.session.session_id:
             return True  # 只有占位槽位，没有真实会话可停。
 
-        # 在停止会话前，清理 Agent Window 中多余的弹窗/外链标签页，避免触发 dropOnly 导致窗口留在宿主机
+        # 在停止会话前，清理 Agent Window 中所有的标签页，避免触发 dropOnly 导致窗口留在宿主机
         try:
-            res = await self._runner.run(
-                ["tab", "list", "--scope", "agent", "--session", entry.session.session_id, "--json"],
-                timeout=5.0,
+            res = await self._cli.list_tabs(
+                session=entry.session.session_id, scope="agent", timeout=5.0
             )
             raw = res.data
-            tab_list = raw.get("tabs", []) if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
-            if isinstance(tab_list, list) and len(tab_list) > 1:
-                for t in tab_list[1:]:
+            tab_list = (
+                raw.get("tabs", [])
+                if isinstance(raw, dict)
+                else (raw if isinstance(raw, list) else [])
+            )
+            if isinstance(tab_list, list) and tab_list:
+                for t in tab_list:
                     if isinstance(t, dict):
                         tid = t.get("tab_id", t.get("id"))
                         if tid is not None:
                             try:
-                                close_cmd = ["tab", "close", str(tid), "--session", entry.session.session_id]
-                                try:
-                                    sync_res = await self._runner.run(
-                                        ["sync", "--session", entry.session.session_id, "--tab-id", str(tid), "--json"],
-                                        timeout=5.0,
-                                    )
-                                    sync_data = sync_res.data if isinstance(sync_res.data, dict) else {}
-                                    ctx_id = str(sync_data.get("context_id") or sync_data.get("ctx") or "")
-                                    obs_id = str(sync_data.get("observation_id") or sync_data.get("obs") or "")
-                                    if ctx_id:
-                                        close_cmd += ["--context", ctx_id]
-                                    if obs_id:
-                                        close_cmd += ["--observation", obs_id]
-                                except Exception as sync_exc:  # noqa: BLE001
-                                    self._logger.debug("关闭前同步标签页 %s 凭证失败（降级直接关闭）：%r", tid, sync_exc)
-
-                                close_cmd.append("--json")
-                                await self._runner.run(close_cmd, timeout=5.0)
+                                await self._cli.close_tab_safe(
+                                    entry.session.session_id, tid, timeout=5.0
+                                )
                             except Exception as exc:  # noqa: BLE001
-                                self._logger.debug("关闭多余标签页 %s 失败（忽略）：%r", tid, exc)
+                                self._logger.debug("安全关闭标签页 %s 失败（忽略）：%r", tid, exc)
         except Exception as exc:  # noqa: BLE001
             self._logger.debug("获取 Agent 标签页列表以清理失败（忽略）：%r", exc)
 
@@ -1995,8 +1981,8 @@ class SessionManager:
         """
         try:
             await asyncio.wait_for(
-                self._runner.run_or_raise(
-                    args, timeout=attempt_timeout, expect_json=False
+                self._cli.stop_session(
+                    session_id, timeout=attempt_timeout, raise_on_error=True
                 ),
                 timeout=backstop,
             )

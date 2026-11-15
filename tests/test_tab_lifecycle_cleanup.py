@@ -122,10 +122,11 @@ def test_session_manager_stop_entry_sweeps_tabs_from_dict_payload():
         success = await sm._stop_entry(entry)
         assert success is True
 
-        # 验证确实对 tab_id=102 发起了 tab close
+        # 验证确实对所有 tab 发起了安全关闭
         close_calls = [call for call in runner.run.call_args_list if "close" in call[0][0]]
-        assert len(close_calls) == 1
-        assert "102" in close_calls[0][0][0] or "102" in close_calls[0][0]
+        assert len(close_calls) >= 2
+        assert any("101" in call[0][0] for call in close_calls)
+        assert any("102" in call[0][0] for call in close_calls)
 
     asyncio.run(_test())
 
@@ -163,8 +164,9 @@ def test_session_manager_reap_idle_cleans_extra_tabs():
         assert "k_idle" not in sm._entries
 
         close_calls = [call for call in runner.run.call_args_list if "close" in call[0][0]]
-        assert len(close_calls) == 1
-        assert "2" in close_calls[0][0][0] or "2" in close_calls[0][0]
+        assert len(close_calls) >= 2
+        assert any("1" in call[0][0] for call in close_calls)
+        assert any("2" in call[0][0] for call in close_calls)
 
     asyncio.run(_test())
 
@@ -279,6 +281,48 @@ def test_service_tabs_close_fetches_sync_credentials():
         assert "ctx-tab-close-789" in cmd
 
     asyncio.run(_test())
+
+
+def test_stop_entry_safely_closes_all_tabs():
+    async def _test():
+        from unittest.mock import AsyncMock, MagicMock
+        from bsk.session import SessionManager, _Entry
+        from bsk.models import BskSession, BskResult
+
+        runner = MagicMock()
+        calls = []
+        async def mock_run(args, timeout=None, **kwargs):
+            cmd = " ".join(args)
+            calls.append(cmd)
+            if "tab list" in cmd:
+                return BskResult(ok=True, exit_code=0, stdout="", stderr="", data={
+                    "tabs": [
+                        {"tab_id": 101, "title": "Baidu", "active": False},
+                        {"tab_id": 102, "title": "Tieba", "active": True},
+                    ]
+                })
+            elif "sync" in cmd:
+                return BskResult(ok=True, exit_code=0, stdout="", stderr="", data={"observation_id": "obs-1", "context_id": "ctx-1"})
+            return BskResult(ok=True, exit_code=0, stdout="", stderr="", data={})
+
+        runner.run = AsyncMock(side_effect=mock_run)
+        runner.run_or_raise = AsyncMock(side_effect=mock_run)
+        sm = SessionManager(runner, MagicMock())
+
+        session = BskSession(session_id="sess_multi", agent_window_id=1)
+        entry = _Entry(key="k_multi", session=session, lock=asyncio.Lock(), last_used=100.0)
+
+        success = await sm._stop_entry(entry)
+        assert success is True
+
+        # Check that both 101 and 102 received select, sync, and close calls
+        close_calls = [c for c in calls if c.startswith("tab close")]
+        assert len(close_calls) >= 2
+        assert any("101" in c for c in close_calls)
+        assert any("102" in c for c in close_calls)
+
+    asyncio.run(_test())
+
 
 
 
