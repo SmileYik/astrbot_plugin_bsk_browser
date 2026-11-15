@@ -18,6 +18,9 @@ def test_skills_documents_exist_and_cover_required_guidance():
     assert "full_page" in bsk_content
     assert "新标签页" in bsk_content or "新标签" in bsk_content
     assert "压缩" in bsk_content
+    assert "bsk_status" in bsk_content
+    for removed in ("bsk_close", "bsk_logs", "bsk_open", "bsk_read", "bsk_act"):
+        assert removed not in bsk_content, f"{removed} should not be in bsk-browser/SKILL.md"
     
     # 百度和必应文档必须包含新标签页阅读与关闭指引
     for doc in (baidu, bing):

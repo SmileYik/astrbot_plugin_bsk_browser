@@ -270,9 +270,9 @@ def default_shot_dir(data_dir, logger=None) -> Path:      # <data_dir>/shots
 ### D3：`evaluate` 单独成工具、默认关闭、强制管理员（原为"不做 evaluate"，v0.1.0 追加）
 
 `evaluate` 能让模型在用户已登录页面执行任意 JS。能力保留但默认关闭，
-且独立成一个工具而不是并进 `bsk_act`，具体决策见 §5 D7。
+且独立成一个工具而不是并进 `bsk_interact`，具体决策见 §5 D7。
 
-仍然不做的事：不把它作为 `bsk_act` 的一个 action（那样会绕过独立开关与
+仍然不做的事：不把它作为 `bsk_interact` 的一个 action（那样会绕过独立开关与
 AstrBot 原生的 `tool_permissions`），也不给它任何"自动降级"路径。
 
 ### D4：会话键策略
@@ -356,14 +356,14 @@ AstrBot 的 `tool_call_timeout` 默认 120 秒（源码 `core/agent/run_context.
 
 因此有三个决策，每个都对应上表的一行：
 
-**为什么单独成工具（而不是 `bsk_act` 的一个 action）**
+**为什么单独成工具（而不是 `bsk_interact` 的一个 action）**
 
 1. 才能被单独禁用。动作混在一个工具里，用户就没法"保留点击、禁掉执行脚本"
    —— 只能整块开或整块关，等于逼用户在做不到精细控制时干脆全开。
 2. 才能被 AstrBot 原生的 `tool_permissions` 单独控制（WebUI → 扩展 → 组件）。
-   框架那一层是按工具名授权的；`evaluate` 藏在 `bsk_act` 里就自动继承了
-   `bsk_act` 的授权，管理员在框架侧无法把它单独摘出去。
-3. 权限判定顺序才能不同。`bsk_act` 走 `_denied()`；`evaluate` 要在它之前
+   框架那一层是按工具名授权的；`evaluate` 藏在 `bsk_interact` 里就自动继承了
+   `bsk_interact` 的授权，管理员在框架侧无法把它单独摘出去。
+3. 权限判定顺序才能不同。`bsk_interact` 走 `_denied()`；`evaluate` 要在它之前
    多插两道判（见下）。
 
 **为什么默认关闭（`enable_evaluate=false`）**
@@ -488,68 +488,32 @@ async def bsk_session(self, event: AstrMessageEvent, **kwargs):
 模型唯一能看到的说明 —— 所以每个 docstring 里仍写清 action 取值，并控制在 300 字符
 以内（token 成本）。
 
-**旧 8 个工具不走这条管线**，它们就是普通的装饰器工具，schema 由 docstring 生成，
-与 0.1.x 完全一致。它们由配置项 `legacy_tools` 与 `legacy_fringe_tools` 两级控制（§5 D9）。
+### D9：废弃冗余单动作旧工具，独立扩展工具（`bsk_status` / `bsk_evaluate`）独立开关与按需注册机制
 
-### D9：旧工具的两级开关（`legacy_tools` / `legacy_fringe_tools`）—— 用运行期 `active` 而非框架的停用 API
+在 0.3.x 引入 8 个多动作主工具后，原 0.1.x 的单动作旧工具与新主工具长期并存。为了彻底消除冗余、降低模型混淆与固定上下文开销，正式移除冗余单动作工具，并为保留的独立扩展工具提供轻量开关：
 
-8 个主工具落地后，16 个工具并存会降低模型的选择准确率，同时 8 个旧工具的说明是
-**每一轮对话都要付的固定开销**。所以给旧工具两级开关，让用户自己决定带不带兼容层跑：
+1. **彻底移除 5 个冗余旧工具**：`bsk_open`、`bsk_read`、`bsk_act`、`bsk_close`、`bsk_logs`。它们的功能已被 `bsk_page`、`bsk_inspect`、`bsk_interact`、`bsk_session` 100% 原生覆盖，移除可彻底消除工具选择歧义并永久省下约 3600 字符的提示词上下文。同时移除已无意义的 `legacy_tools` 与 `legacy_fringe_tools` 配置项。
+2. **保留 2 个独立扩展工具**：
+   - `bsk_status`：环境诊断工具，无副作用，默认开启（`enable_status=true`）。不需要自检诊断的用户可通过置为 `false` 关闭注册，进一步节省模型提示词。
+   - `bsk_evaluate`：执行任意 JS 的高危工具，默认关闭（`enable_evaluate=false`）。开启后受 `evaluate_require_admin` 严格门禁保护。
 
-| 配置 | 默认 | 管什么 | 停用后剩下 |
-|---|---|---|---|
-| `legacy_tools` | `true` | 全部 8 个旧工具 | 8 个主工具（`bsk_debug` 按需加载时是 7 个）+ `bsk_evaluate` |
-| `legacy_fringe_tools` | `false` | 其中"有等价新工具"的 3 个：`bsk_open` / `bsk_read` / `bsk_act` | 常用的 4 个继续注册 |
+| 工具名 | 类型 | 开关配置项 | 默认值 | 停用行为 |
+|---|---|---|---|---|
+| `bsk_status` | 独立扩展工具 | `enable_status` | `true` | `tool.active = False` |
+| `bsk_evaluate` ⚠️ | 独立扩展工具 | `enable_evaluate` | `false` | `tool.active = False` |
 
-**为什么 `legacy_tools` 默认必须是 `true`**：AstrBot 的插件配置是 merge 语义（缺失键插默认值、
-已有的非 `None` 值原样保留）且加载时立即写盘。默认 `true` → 老用户升级后一切照旧；
-默认 `false` → 等于**静默关掉** 7 个旧工具（`bsk_evaluate` 除外），正在用旧写法的提示词会毫无预兆地发现工具"没了"。
-
-**为什么 `legacy_fringe_tools` 默认是 `false`**：这是本次升级唯一会让老用户感知到的默认变化，
-之所以敢默认关，是因为那 3 个都有等价的新工具（`bsk_open` → `bsk_page` + `bsk_inspect`、
-`bsk_read` → `bsk_inspect`、`bsk_act` → `bsk_interact`），关掉不减能力；而常用的 3 个
-是诊断入口与关会话工具（`bsk_status`、`bsk_close`、`bsk_logs`，原 `bsk_screenshot` 已下线合入新工具 `bsk_inspect`），
-所以留在 `legacy_tools` 这一级。两个开关都开时才是"全兼容"形态。
+**为什么未开启时不向模型暴露（`tool.active = False`）**：
+- `bsk_evaluate` 属于最高危权限工具，且仅在高级特定场景使用。默认 `enable_evaluate=false` 时，若向模型暴露其描述与参数，既浪费上下文 token，又增加非预期调用的潜在风险。因此在 `initialize()` 中直接置 `tool.active = False`，使其完全不进入每轮对话的工具列表。
+- `bsk_status` 同理，当用户在配置中显式设为 `false` 时，在 `initialize()` 中置 `tool.active = False`。
 
 **为什么直接设 `tool.active = False`，而不是调框架的 `deactivate_llm_tool_async`**：
-后者会把这个名字写进**持久化**的 `inactivated_llm_tools`（全局 SharedPreferences）。
-用户只是临时关掉 `legacy_tools` 试试，却会在全局配置里留下永久痕迹，**卸载插件也带不走**
-—— 下次装回来那 8 个工具还是关着的。直接设 `active` 只影响本次进程，随插件重载自然恢复。
+后者会把工具名写进**持久化**的 `inactivated_llm_tools`（全局 SharedPreferences）。
+用户只是临时通过插件配置开关调试，却会在全局配置里留下永久痕迹，**卸载插件也带不走**。直接设 `active` 只影响本次进程，随插件重载或配置变更自然按需生效。
 
-**两个已知边界**（`_conf_schema.json` 的 hint 里已如实写明）：
-
-1. 用户若在 AstrBot WebUI 的「扩展 → 组件」里手动关过某个旧工具，
-   `star_manager` 每次加载都会重算 `ft.active = not plugin_disabled and ft.name not in inactivated_llm_tools`
-   —— 那一步在 `_deactivate_legacy_tools()` **之后**跑，所以框架侧的关闭状态始终优先；
-2. 只在插件加载时执行一次，改配置需要重新加载插件。
-
-**`bsk_evaluate` 不在停用范围内**（`LEGACY_TOOL_NAMES` 里有它，但循环中显式跳过）：
-它是**独立的高危开关**，由 `enable_evaluate` 控制（§5 D7）。把它绑到 `legacy_tools`
-上会让用户误以为"关掉旧工具"就等于"关掉执行脚本"，而实际上它归另一项管。
-
-**量化收益**（实测，本机 AstrBot 4.28.1，把这 12~16 个工具按 `ToolSet` 序列化成 provider
-真正收到的那份 JSON，取 `len(json.dumps(..., ensure_ascii=False))`；三种 provider 格式分别计）：
-
-| 配置 | 注册的工具数 | Google | Anthropic | OpenAI |
-|---|---|---|---|---|
-| 本仓库 `10dd1f7`（本次改造前：6 主 + 8 旧，`bsk_inspect` 含 24 个调试参数） | 14 | 18914 | 19097 | 19417 |
-| `legacy_tools=true` + `legacy_fringe_tools=true` + `lazy_debug_tool=false` | 16 | 20178 | 20365 | 20749 |
-| `legacy_tools=true` + `legacy_fringe_tools=true` | 15 | 15241 | 15426 | 15778 |
-| **默认**（`legacy_tools=true`、fringe 关、调试按需加载） | **12** | **13300** | **13413** | **13717** |
-| `lazy_debug_tool=false`（`bsk_debug` 一直注册） | 13 | 18237 | 18352 | 18688 |
-| `legacy_tools=false` | 8 | 11669 | 11674 | 11914 |
-
-几个能直接读出来的结论：
-
-- **默认比改造前省 5614 / 5684 / 5700 字符（约 29%）**；
-- **关掉 `legacy_tools` 相对默认再省 1631 / 1739 / 1803 字符**，而不是省下"8 个旧工具"的
-  全部开销 —— 因为默认状态下 fringe 那 3 个本来就没注册；「8 个旧工具全开」与「全关」之间的
-  差额是 3572 / 3752 / 3864 字符（`_conf_schema.json` 的 hint 里写的"约 3600 字符"是这个口径）；
-- **打开 `legacy_fringe_tools` 多付 1941 / 2013 / 2061 字符**（hint 里写的"约 1900"）；
-- **关掉 `lazy_debug_tool` 多付 4937 / 4939 / 4971 字符**（hint 里写的"约 5000"）。
-
-注意 `legacy_tools=false` 后仍是 **8 个而不是 7 个**：多出来的那个正是
-不受本项影响的 `bsk_evaluate`。
+**工具注册数与架构全景**：
+- **8 个主工具**：`bsk_session`、`bsk_page`、`bsk_inspect`、`bsk_interact`、`bsk_tabs`、`bsk_assist`、`bsk_load_tools`（7 个默认常驻） + `bsk_debug`（1 个默认按需加载）；
+- **2 个独立扩展工具**：`bsk_status`（默认常驻） + `bsk_evaluate`（默认关闭）；
+- **默认暴露给模型的工具总数**：7 个主工具 + 1 个 `bsk_status` = **8 个**。按需加载 `bsk_debug` 后为 9 个。
 
 ### D10：与 DSH（`dsh-plugin-browserskill`）的有意差异
 
@@ -663,7 +627,7 @@ self._journal_add(fresh)           # ← 永远执行不到
 | L1 单元测试 | `bsk/*` 纯逻辑：错误映射、VOM 解析、配置校验、截图魔数、会话状态机、框架超时读取与钳制、8 个主工具的 action 枚举与逐 action 参数校验 | ❌ | ❌ | `tests/test_*.py`（840 个用例，`unittest` 口径） |
 | L2 契约测试 | `main.py` 能被真实 AstrBot import、16 个工具注册成功、docstring schema 正确、硬约束（无 `__del__` 等）满足 | ✅ | ❌ | `verify_astrbot_contract.py` |
 | L3 服务层集成 | 真实调用 bsk：开→导航→读→截图→关，含并发与会话过期自动重建 | ✅ | ✅ | `verify_integration.py` |
-| L4 工具层端到端 | 直接 await `main.py` 里的工具函数，验证权限门、参数校验、异步生成器行为、异常包装 | ✅ | ✅ | `verify_tools_e2e.py`（旧工具与新 `bsk_inspect` 截图）、`verify_logs_tool.py`（`bsk_logs`）、`verify_evaluate_gate.py`（`bsk_evaluate` 的权限三分支）、`verify_new_tools_real.py`（8 个新工具、57 个 action） |
+| L4 工具层端到端 | 直接 await `main.py` 里的工具函数，验证权限门、参数校验、异步生成器行为、异常包装 | ✅ | ✅ | `verify_tools_e2e.py`（主工具执行与 `bsk_inspect` 截图）、`verify_evaluate_gate.py`（`bsk_evaluate` 的权限三分支）、`verify_new_tools_real.py`（8 个主工具、57 个 action） |
 
 **为什么必须有 L4**：L2 只证明工具"注册成功"，L3 只走到服务层。工具函数内部那层
 （URL 校验、权限判定、`bsk_inspect` 的 async generator、异常是否被吞掉）
@@ -687,7 +651,7 @@ self._journal_add(fresh)           # ← 永远执行不到
 | `verify_stop_timing_real.py` | `session stop` 真实耗时（为超时预算提供数据依据） | ✅ |
 | `verify_wait_navigation_real.py` | 新增暴露的 `wait_for_navigation` 动作真实可用且只读 | ✅ |
 | `verify_lazy_debug_real.py` | `bsk_debug` 按需加载的完整链路：默认不在工具列表、调 `bsk_load_tools` 后进入**当轮** `req.func_tool`、加载后能真的执行；以及"重新按注册表构造的请求里它仍然不在"（证明没有偷偷改全局） | ✅ |
-| `verify_legacy_groups.py` | `legacy_tools` × `legacy_fringe_tools` 四种组合的真实注册数（15 / 12 / 8 / 8）、`bsk_evaluate` 始终在、`lazy_debug_tool=false` 时 `bsk_debug` 回来 | ❌ |
+| `test_tool_registration.py` | 验证旧工具不存在、`bsk_status` 与 `bsk_evaluate` 开关独立停用逻辑（非持久化 active 机制） | ❌ |
 | `verify_release_ready.py` | 发布前自检（37 项）：元数据、合规红线、架构约束、工作区卫生 | ❌ |
 
 logger 注入与数据落盘位置这两条改动另有专门的单元测试，见 §6.3。

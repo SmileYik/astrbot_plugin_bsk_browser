@@ -4,6 +4,22 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.0] - 2026-11-15
+
+### 破坏性变更 (Breaking Changes)
+
+- **彻底移除 5 个冗余旧工具**：`bsk_open`、`bsk_read`、`bsk_act`、`bsk_close`、`bsk_logs`。它们的功能已由 `bsk_page`、`bsk_inspect`、`bsk_interact`、`bsk_session` 原生 100% 覆盖。
+- **移除废弃配置项**：彻底移除 `legacy_tools` 与 `legacy_fringe_tools`。
+
+### 新增
+
+- **`enable_status` 配置项（默认 `true`）**：允许用户控制是否向模型注册 `bsk_status` 环境自检工具。置为 `false` 可在无需诊断自检时进一步节省提示词开销。
+
+### 变更与优化
+
+- **`bsk_evaluate` 注册优化**：当 `enable_evaluate=false`（默认）时，直接在插件初始化时将其 `active` 设为 `False`，实现未开启时不向模型暴露任何 schema/docstring，彻底消除高危工具对日常对话上下文的固定占用。
+- **技能与元数据文档全面同步**：更新 `skill/bsk-browser/SKILL.md`、`README.md`、`ARCHITECTURE.md` 与 `metadata.yaml`，移除废弃旧工具说明，优化模型引导指令与上下文开销。
+
 ## [0.3.1] - 2026-10-29
 
 补丁版：**插件的行为没有变化**。三处改动里只有许可证的文件布局对用户可见，另外两项是内部

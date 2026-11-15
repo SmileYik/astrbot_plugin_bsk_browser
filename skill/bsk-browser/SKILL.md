@@ -13,12 +13,12 @@ description: 控制 Chromium 浏览器进行自动化网页浏览、搜索、交
 2. **避免盲目重放**：当操作受阻或报错时，优先调用 `bsk_session(action="sync")` 重新同步控制权与元素树，切勿连续重复盲目点击或提交。
 3. **及时释放资源（核心准则，杜绝主机残留）**：
    - 无论通过什么方式创建出来的会话或标签页（包括点击外链自动弹出的新标签页、`bsk_page(action="navigate")`、`bsk_tabs(action="create")` 等），在**阅读或任务完成、用户不再需要浏览器时，必须及时关闭**。
-   - 停止整个会话：`bsk_session(action="stop")` 或 `bsk_close()`（底层会自动清扫全部残留标签页，确保宿主机零孤儿窗口残留）。
+   - 停止整个会话：`bsk_session(action="stop")`（底层会自动清扫全部残留标签页，确保宿主机零孤儿窗口残留）。
    - 关闭单个标签页：`bsk_tabs(action="close", tab_id=...)`。关闭后焦点将自动切回上一标签页。
 
 ## 完整工具箱说明
 
-插件提供 8 个标准多动作工具以及向后兼容工具：
+插件提供 8 个标准多动作工具以及独立自检与扩展工具：
 
 1. **`bsk_session`**：会话生命周期与控制权同步
    - `start`：启动浏览器会话。
@@ -56,10 +56,9 @@ description: 控制 Chromium 浏览器进行自动化网页浏览、搜索、交
 6. **`bsk_load_tools`**：按需加载调试工具（如 `debug`）。
 7. **`bsk_debug`**：高级网络与性能调试工具（按需加载）。
 8. **`bsk_assist`**：辅助与环境模拟（`resize` 调整窗口宽高、`emulate` 模拟环境）。
-9. **兼容旧工具**：
-   - `bsk_close`：关闭当前会话。
-   - `bsk_status`：检查环境与连接状态。
-   - `bsk_logs`：增量读取控制台与网络日志。
+9. **独立自检与扩展工具**：
+   - `bsk_status`：检查环境与连接状态（需 `enable_status=true`，默认开启；在环境异常或排查故障时调用）。
+   - `bsk_evaluate`：执行自定义 JavaScript 表达式（高危工具，需 `enable_evaluate=true` 并经管理员授权，默认关闭）。
 
 ## 浏览器通用操作与使用技巧
 
