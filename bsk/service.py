@@ -1968,6 +1968,8 @@ class BskService:
 
         return observation
 
+    sync = sync_session
+
     async def open_session(
         self,
         key: str,
@@ -3233,9 +3235,23 @@ class BskService:
             if opts.get("active") is False:
                 argv.append("--no-active")
 
+        close_extra_args: list[str] = []
+        if action == "close" and target_tab_id is not None:
+            # 执行 tab close 时，带上该标签页的同步凭据以规避 observation_required
+            try:
+                obs_res = await self.sync_session(session_key, tab_id=int(target_tab_id))
+                ctx_id = getattr(obs_res, "context_id", None)
+                obs_id = getattr(obs_res, "observation_id", None)
+                if ctx_id:
+                    close_extra_args += ["--context", str(ctx_id)]
+                if obs_id:
+                    close_extra_args += ["--observation", str(obs_id)]
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("关闭标签页前同步凭证失败（降级直接关闭）：%r", exc)
+
         result = await self.sessions.execute(
             session_key,
-            lambda sid: [*argv, "--session", sid, "--json"],
+            lambda sid: [*argv, *close_extra_args, "--session", sid, "--json"],
             timeout=self._timeout(TIMEOUT_ACTION),
             # 标签管理本身是"窗口/标签"操作，不是页面写操作；但它会改变
             # 会话能看到的标签集合，且 borrow/return 涉及用户自己的标签。

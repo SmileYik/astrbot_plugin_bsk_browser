@@ -1733,10 +1733,24 @@ class SessionManager:
                         tid = t.get("tab_id", t.get("id"))
                         if tid is not None:
                             try:
-                                await self._runner.run(
-                                    ["tab", "close", str(tid), "--session", entry.session.session_id, "--json"],
-                                    timeout=5.0,
-                                )
+                                close_cmd = ["tab", "close", str(tid), "--session", entry.session.session_id]
+                                try:
+                                    sync_res = await self._runner.run(
+                                        ["sync", "--session", entry.session.session_id, "--tab-id", str(tid), "--json"],
+                                        timeout=5.0,
+                                    )
+                                    sync_data = sync_res.data if isinstance(sync_res.data, dict) else {}
+                                    ctx_id = str(sync_data.get("context_id") or sync_data.get("ctx") or "")
+                                    obs_id = str(sync_data.get("observation_id") or sync_data.get("obs") or "")
+                                    if ctx_id:
+                                        close_cmd += ["--context", ctx_id]
+                                    if obs_id:
+                                        close_cmd += ["--observation", obs_id]
+                                except Exception as sync_exc:  # noqa: BLE001
+                                    self._logger.debug("关闭前同步标签页 %s 凭证失败（降级直接关闭）：%r", tid, sync_exc)
+
+                                close_cmd.append("--json")
+                                await self._runner.run(close_cmd, timeout=5.0)
                             except Exception as exc:  # noqa: BLE001
                                 self._logger.debug("关闭多余标签页 %s 失败（忽略）：%r", tid, exc)
         except Exception as exc:  # noqa: BLE001

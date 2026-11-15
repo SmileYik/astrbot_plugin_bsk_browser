@@ -218,6 +218,9 @@ class PageObservation:
     observation_id: str = ""
     """bsk 协同控制中的严格页面观察令牌（来自 sync/open/observe 响应）。"""
 
+    context_id: str = ""
+    """bsk 协同控制中的上下文标识（来自 sync/open 响应）。"""
+
     @classmethod
     def from_json(cls, raw: Any) -> PageObservation:
         """从 ``observe --json`` 或 ``sync --json`` 的输出构造（``text`` 的解析在 pages.py 里做）。"""
@@ -231,6 +234,11 @@ class PageObservation:
             or raw.get("obs")
             or (raw.get("observation", {}) if isinstance(raw.get("observation"), dict) else {}).get("observation_id")
         )
+        context_id = _as_str(
+            raw.get("context_id")
+            or raw.get("ctx")
+            or (raw.get("observation", {}) if isinstance(raw.get("observation"), dict) else {}).get("context_id")
+        )
         return cls(
             text=text,
             ref_count=_as_int(raw.get("ref_count")),
@@ -238,6 +246,7 @@ class PageObservation:
             truncated=_as_bool(raw.get("truncated")),
             next_cursor=_as_str(raw.get("next_cursor")),
             observation_id=observation_id,
+            context_id=context_id,
         )
 
 

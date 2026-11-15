@@ -198,5 +198,89 @@ def test_detect_new_tabs_syncs_before_select():
     asyncio.run(_test())
 
 
+def test_stop_entry_fetches_sync_credentials_for_tab_close():
+    async def _test():
+        from unittest.mock import AsyncMock, MagicMock
+        from bsk.session import SessionManager, _Entry
+        from bsk.models import BskSession
+
+        runner = MagicMock()
+        calls = []
+
+        async def mock_run(args, timeout=None, **kwargs):
+            cmd = " ".join(args)
+            calls.append(cmd)
+            if "tab list" in cmd:
+                return MagicMock(data={
+                    "tabs": [
+                        {"tab_id": 101, "title": "Main", "url": "https://www.baidu.com"},
+                        {"tab_id": 102, "title": "Popup", "url": "https://tieba.baidu.com"},
+                    ]
+                })
+            elif "sync" in cmd and "102" in cmd:
+                return MagicMock(data={"context_id": "ctx-abc-123", "observation_id": "obs-xyz-789"})
+            elif "tab close" in cmd:
+                return MagicMock(data={"tab_id": 102})
+            elif "session stop" in cmd:
+                return MagicMock(data={}, exit_code=0)
+            return MagicMock(data={})
+
+        runner.run = AsyncMock(side_effect=mock_run)
+        runner.run_or_raise = AsyncMock(side_effect=mock_run)
+        sm = SessionManager(runner, MagicMock())
+
+        session = BskSession(session_id="sess_test", agent_window_id=1)
+        entry = _Entry(key="k_sync", session=session, lock=asyncio.Lock(), last_used=100.0)
+
+        success = await sm._stop_entry(entry)
+        assert success is True
+
+        # 验证在 tab close 之前调用了 sync 102
+        sync_calls = [c for c in calls if c.startswith("sync") and "102" in c]
+        assert len(sync_calls) == 1
+
+        # 验证 tab close 携带了 --context 与 --observation 凭证
+        close_calls = [c for c in calls if c.startswith("tab close") and "102" in c]
+        assert len(close_calls) == 1
+        assert "--context ctx-abc-123" in close_calls[0]
+        assert "--observation obs-xyz-789" in close_calls[0]
+
+    asyncio.run(_test())
+
+
+def test_service_tabs_close_fetches_sync_credentials():
+    async def _test():
+        from unittest.mock import AsyncMock, MagicMock
+        from bsk.service import BskService
+
+        service = BskService(settings=MagicMock(), runner=MagicMock(), logger=MagicMock())
+        # mock sync_session
+        service.sync_session = AsyncMock(return_value=MagicMock(
+            observation_id="obs-tab-close-456",
+            context_id="ctx-tab-close-789",
+        ))
+        service.sessions = MagicMock()
+        service.sessions.execute = AsyncMock(return_value=MagicMock(data={"tab_id": 105}))
+        service._resolve_key = MagicMock(return_value="sess_key")
+
+        await service.tabs("sess_key", "close", tab_id=105)
+
+        # 验证调用了 sync_session 并带上了 tab_id
+        service.sync_session.assert_awaited_once_with("sess_key", tab_id=105)
+
+        # 验证 sessions.execute 构造的关闭命令行中包含了凭证
+        assert service.sessions.execute.call_count >= 1
+        _key, cmd_factory = service.sessions.execute.call_args_list[0][0]
+        cmd = cmd_factory("sid_123")
+        assert "close" in cmd
+        assert "--observation" in cmd
+        assert "obs-tab-close-456" in cmd
+        assert "--context" in cmd
+        assert "ctx-tab-close-789" in cmd
+
+    asyncio.run(_test())
+
+
+
 
 

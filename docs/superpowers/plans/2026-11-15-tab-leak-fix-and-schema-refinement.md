@@ -42,7 +42,7 @@
 - Consumes: `skills/` 下现有的三个技能文档与 `tests/test_skills_doc.py`
 - Produces: 符合 `AGENTS.md` 命名规范的技能目录体系
 
-- [ ] **Step 1: Write failing test in `tests/test_skills_doc.py` for new skill directory names**
+- [x] **Step 1: Write failing test in `tests/test_skills_doc.py` for new skill directory names**
 
 ```python
 def test_skill_directory_names_match_agents_md():
@@ -54,12 +54,12 @@ def test_skill_directory_names_match_agents_md():
     assert not (skills_root / "bsk-browse-cn.bing.com").exists()
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_skills_doc.py -k test_skill_directory_names_match_agents_md -v`
 Expected: FAIL with `AssertionError: assert not (skills_root / 'bsk-browse-baidu.com').exists()`
 
-- [ ] **Step 3: Rename skill directories and update references**
+- [x] **Step 3: Rename skill directories and update references**
 
 1. 执行 `git mv skills/bsk-browse-baidu.com skills/bsk-browse-baidu`
 2. 执行 `git mv skills/bsk-browse-cn.bing.com skills/bsk-browse-bingcn`
@@ -68,12 +68,12 @@ Expected: FAIL with `AssertionError: assert not (skills_root / 'bsk-browse-baidu
 5. 更新 `skills/bsk-browser/SKILL.md` 中对于百度/必应扩展技能的引用名称
 6. 更新 `tests/test_skills_doc.py` 中所有的旧目录名断言
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/test_skills_doc.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add skills/ tests/test_skills_doc.py
@@ -93,7 +93,7 @@ git commit -m "refactor(skills): rename baidu and bing skill directories to matc
 - Consumes: `bsk/permissions.py:is_action_allowed`
 - Produces: `_conf_schema.json` 中带有层级结构 `options`, `labels`, `subtitles` 的 `allowed_actions`
 
-- [ ] **Step 1: Write failing test in `tests/test_config.py` for schema options, labels, and text refinement**
+- [x] **Step 1: Write failing test in `tests/test_config.py` for schema options, labels, and text refinement**
 
 ```python
 def test_site_whitelist_schema_hierarchical_options(self):
@@ -115,12 +115,12 @@ def test_site_whitelist_schema_hierarchical_options(self):
     assert actions_meta["labels"][idx_child].startswith("\u00a0\u00a0\u00a0\u00a0click")
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_config.py -k test_site_whitelist_schema_hierarchical_options -v`
 Expected: FAIL with `AssertionError: assert site_rule["name"] == "网站授权规则"`
 
-- [ ] **Step 3: Update `_conf_schema.json` and sync permissions test fixtures**
+- [x] **Step 3: Update `_conf_schema.json` and sync permissions test fixtures**
 
 1. 精炼 `site_whitelist` 文案与标题：
    - 描述：“普通用户网站与操作白名单”
@@ -135,12 +135,12 @@ Expected: FAIL with `AssertionError: assert site_rule["name"] == "网站授权�
    - `bsk_tabs:`（`bsk_tabs.*`）及其子动作：`list`, `select`, `create`, `close`
 3. 检查 `test_config.py` 与 `test_permissions_integration.py`，确保配置项加载与权限校验测试通过。
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_config.py tests/test_permissions_integration.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add _conf_schema.json tests/test_config.py tests/test_permissions_integration.py
@@ -159,7 +159,7 @@ git commit -m "feat(config): refine site_whitelist schema and add hierarchical m
 - Consumes: `BskService.tabs`, `BskService.sync`
 - Produces: `detect_new_tabs_and_switch(key: str) -> dict[str, Any] | None`（切换前进行状态同步与重试）
 
-- [ ] **Step 1: Write failing unit test in `tests/test_tab_lifecycle_cleanup.py`**
+- [x] **Step 1: Write failing unit test in `tests/test_tab_lifecycle_cleanup.py`**
 
 ```python
 @pytest.mark.asyncio
@@ -167,24 +167,24 @@ async def test_detect_new_tabs_syncs_before_select():
     # 模拟在 detect_new_tabs_and_switch 发现新 tab 时，必须先调用 sync 同步新 tab 状态，然后再发起 tab select
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_tab_lifecycle_cleanup.py -k test_detect_new_tabs_syncs_before_select -v`
 Expected: FAIL
 
-- [ ] **Step 3: Implement state sync and resilient select in `detect_new_tabs_and_switch`**
+- [x] **Step 3: Implement state sync and resilient select in `detect_new_tabs_and_switch`**
 
 在 `bsk/service.py` 的 `detect_new_tabs_and_switch` 中：
 1. 确定 `new_tab_id` 后，先尝试调用 `await self.sync(session_key, tab_id=new_tab_id)` 建立控制权并拉齐 epoch；
 2. 再执行 `await self.tabs(session_key, "select", tab_id=new_tab_id)` 切换焦点；
 3. 若 `tabs("select")` 仍遇到 `cooperation_sync_required`，安全记录 warning 并降级，同时保存 active_url，确保后续 `observe` 准确命中新标签页。
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/test_tab_lifecycle_cleanup.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add bsk/service.py tests/test_tab_lifecycle_cleanup.py
@@ -205,7 +205,7 @@ git commit -m "fix(service): synchronize tab state before switching focus to new
 - Consumes: `SessionManager._stop_entry`, `BskService.sweep_agent_tabs`, `BskRunner.run`
 - Produces: 带 `--context` 与 `--observation` 的 `tab close` 执行命令，彻底消除 `dropOnly: true` 残留
 
-- [ ] **Step 1: Write failing unit tests in `tests/test_tab_lifecycle_cleanup.py` for credential-backed tab close**
+- [x] **Step 1: Write failing unit tests in `tests/test_tab_lifecycle_cleanup.py` for credential-backed tab close**
 
 ```python
 @pytest.mark.asyncio
@@ -213,12 +213,12 @@ async def test_stop_entry_fetches_sync_credentials_for_tab_close():
     # 模拟 session stop 扫尾时，执行 tab close 必须带有 --context 与 --observation 凭据
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_tab_lifecycle_cleanup.py -k test_stop_entry_fetches_sync_credentials_for_tab_close -v`
 Expected: FAIL
 
-- [ ] **Step 3: Implement credential injection in `_stop_entry`, `sweep_agent_tabs` and `tabs`**
+- [x] **Step 3: Implement credential injection in `_stop_entry`, `sweep_agent_tabs` and `tabs`**
 
 1. 在 `bsk/session.py` 的 `_stop_entry`：
    遍历 `tab_list[1:]` 时，对每个多余 `tid`：
@@ -231,17 +231,17 @@ Expected: FAIL
 3. 在 `bsk/service.py` 的 `tabs(action="close")`：
    检查是否存在或补全 `--context` / `--observation` 选项。
 
-- [ ] **Step 4: Run all tests to verify they pass**
+- [x] **Step 4: Run all tests to verify they pass**
 
 Run: `pytest tests/test_tab_lifecycle_cleanup.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Run full plugin test suite**
+- [x] **Step 5: Run full plugin test suite**
 
 Run: `pytest -v`
 Expected: All tests pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add bsk/session.py bsk/service.py tests/test_tab_lifecycle_cleanup.py
