@@ -3474,7 +3474,7 @@ class BskService:
             else self._timeout(TIMEOUT_SCREENSHOT)
         )
 
-        argv = ["screenshot", "--out", str(out_path)]
+        argv = ["screenshot", "--out", str(Path(out_path).resolve().absolute())]
         if ref:
             argv += ["--ref", ref]
         if use_full_page:
@@ -3525,7 +3525,9 @@ class BskService:
                 self._session_observations.pop(session_key, None)
         shot = Screenshot.from_json(result.data)
         if not shot.path:
-            shot.path = str(out_path)
+            shot.path = str(Path(out_path).resolve().absolute())
+        else:
+            shot.path = str(Path(shot.path).resolve().absolute())
 
         ok, reason = verify_shot(shot)
         warning = "" if ok else f"截图可能不完整：{reason}"

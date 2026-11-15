@@ -101,5 +101,20 @@ class TestInspectScreenshotImage(unittest.IsolatedAsyncioTestCase):
         self.assertIn("已在插件配置中停用", items[0])
 
 
+    async def test_make_shot_path_returns_absolute_path(self) -> None:
+        from astrbot_plugin_bsk_browser.bsk.shots import make_shot_path
+        import tempfile
+        import os
+        orig_cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            os.chdir(tmp_dir)
+            try:
+                p = make_shot_path("relative_subdir", "test_session_1")
+                self.assertTrue(p.is_absolute())
+                self.assertTrue(str(p).startswith(tmp_dir))
+            finally:
+                os.chdir(orig_cwd)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -304,7 +304,7 @@ def make_shot_path(directory: str | Path, session_id: str, *, ext: str = ".png")
         OSError: 目录创建失败，或重试多次仍抢不到唯一名字。这个必须让调用方知道：
             拿不到确定路径就没法安全地截图。
     """
-    base = Path(directory) / "shots" / sanitize_session_id(session_id)
+    base = Path(directory).resolve().absolute() / "shots" / sanitize_session_id(session_id)
 
     suffix = str(ext or ".png").strip()
     if not suffix.startswith("."):
@@ -327,7 +327,7 @@ def make_shot_path(directory: str | Path, session_id: str, *, ext: str = ".png")
             raise
         with contextlib.suppress(OSError):
             os.close(fd)
-        return candidate
+        return candidate.resolve().absolute()
 
     raise OSError(f"连续 8 次都没能抢到唯一的截图文件名，目录：{base}")
 
