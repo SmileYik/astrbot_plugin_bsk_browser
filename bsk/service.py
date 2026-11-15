@@ -225,6 +225,7 @@ class BskService:
             logger=self._logger,
         )
         self._session_observations: dict[str, str] = {}
+        self._session_known_tabs: dict[str, set[int]] = {}
 
     def _make_journal(self) -> SessionJournal:
         """按配置构造 journal；没配就用插件数据目录下的默认位置。
@@ -601,6 +602,8 @@ class BskService:
         self._session_observations.pop(session_key, None)
 
         observation = await self.observe(session_key)
+        if observation.tab_id:
+            self._session_known_tabs.setdefault(session_key, set()).add(observation.tab_id)
         return nav, observation
 
     # ------------------------------------------------------------------
@@ -704,6 +707,9 @@ class BskService:
             if obs_id:
                 self._session_observations[session_key] = obs_id
                 observation.observation_id = obs_id
+
+        if observation.tab_id:
+            self._session_known_tabs.setdefault(session_key, set()).add(observation.tab_id)
 
         counters_after = self.sessions.stats().get("counters", {})
         rebuilds_after = counters_after.get("not_found_rebuilds", 0)
@@ -1872,6 +1878,9 @@ class BskService:
                 self._session_observations[session_key] = obs_id
                 observation.observation_id = obs_id
 
+        if observation.tab_id:
+            self._session_known_tabs.setdefault(session_key, set()).add(observation.tab_id)
+
         counters_after = stats_fn().get("counters", {}) if callable(stats_fn) else {}
         rebuilds_after = counters_after.get("not_found_rebuilds", 0) if isinstance(counters_after, dict) else 0
         if rebuilds_after > rebuilds_before:
@@ -1923,6 +1932,9 @@ class BskService:
             if obs_id:
                 self._session_observations[session_key] = obs_id
                 observation.observation_id = obs_id
+
+        if observation.tab_id:
+            self._session_known_tabs.setdefault(session_key, set()).add(observation.tab_id)
         return observation
 
     # ------------------------------------------------------------------
@@ -2788,15 +2800,84 @@ class BskService:
         if action in ("click", "fill", "press", "select", "drag", "upload"):
             self._session_observations.pop(session_key, None)
 
+        new_tab_info = None
+        if action == "click":
+            new_tab_info = await self.detect_new_tabs_and_switch(session_key)
+
         out: dict[str, Any] = {
             "session": self._session_field(session_key),
             "action": action,
-            "tab_id": self._payload_tab_id(result.data),
+            "tab_id": (
+                new_tab_info["new_tab_id"]
+                if new_tab_info
+                else self._payload_tab_id(result.data)
+            ),
             "auto_scrolled": auto_scrolled,
             "auto_synced": auto_synced,
+            "new_tab_info": new_tab_info,
         }
         out.update(self._interact_result(action, opts, result.data, readonly))
         return out
+
+    async def detect_new_tabs_and_switch(self, key: str) -> dict[str, Any] | None:
+        """检测当前会话的 Agent Window 是否有新打开的标签页（如点击外链 target="_blank"）。
+
+        若检测到新增 Tab：
+        1. 自动执行 `tab select <new_tab_id>` 将当前焦点与控制权切换至该标签页；
+        2. 将新 Tab 加入会话的已跟踪集合；
+        3. 返回包含新 Tab 信息的字典供上层通知大模型。
+        若无新标签页，返回 None。
+        """
+        session_key = self._resolve_key(key)
+        try:
+            tabs_data = await self.tabs(session_key, "list", scope="agent")
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("获取 Agent 标签页列表失败（忽略）：%r", exc)
+            return None
+
+        tab_list = tabs_data.get("tabs", [])
+        if not isinstance(tab_list, list) or not tab_list:
+            return None
+
+        current_tab_ids = {
+            t["tab_id"] for t in tab_list if isinstance(t, dict) and "tab_id" in t
+        }
+        known = self._session_known_tabs.setdefault(session_key, set())
+
+        # 若之前从未记录过，则以当前标签集合为基准
+        if not known:
+            known.update(current_tab_ids)
+            return None
+
+        new_ids = current_tab_ids - known
+        if not new_ids:
+            return None
+
+        # 存在新打开的标签页：选排在最后的那个新 tab
+        target_tab = None
+        for t in reversed(tab_list):
+            if isinstance(t, dict) and t.get("tab_id") in new_ids:
+                target_tab = t
+                break
+
+        if not target_tab:
+            return None
+
+        new_tab_id = target_tab["tab_id"]
+        known.update(new_ids)
+
+        # 自动切换焦点至新标签页
+        try:
+            await self.tabs(session_key, "select", tab_id=new_tab_id)
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning("自动切换至新标签页 %s 失败：%r", new_tab_id, exc)
+
+        return {
+            "new_tab_id": new_tab_id,
+            "title": str(target_tab.get("title") or ""),
+            "url": str(target_tab.get("url") or ""),
+            "total_tabs": len(current_tab_ids),
+        }
 
     @staticmethod
     def _payload_tab_id(data: Any) -> int | None:

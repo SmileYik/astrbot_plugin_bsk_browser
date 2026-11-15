@@ -1752,7 +1752,7 @@ class BskBrowserPlugin(Star):
         extra = {
             name: value
             for name, value in result.items()
-            if name not in ("session", "action", "target", "changed", "tab_id", "auto_scrolled", "auto_synced")
+            if name not in ("session", "action", "target", "changed", "tab_id", "auto_scrolled", "auto_synced", "new_tab_info")
             and value not in (None, "", [], {})
         }
         if extra:
@@ -1766,6 +1766,16 @@ class BskBrowserPlugin(Star):
             lines.append("（注意：目标元素原先位于视口外，已自动将其滚动至视口中心并完成操作。）")
         if result.get("auto_synced"):
             lines.append("（提示：检测到页面控制上下文未同步，已在后台自动执行 sync 补救重试；注意：后续在页面跳转或导航后，请优先主动调用 bsk_session(action='sync') 同步页面。）")
+        if result.get("new_tab_info"):
+            new_tab = result["new_tab_info"]
+            lines.append(
+                f"\n【检测到新标签页】点击操作在浏览器中打开了新标签页：\n"
+                f"- 标签 ID: {new_tab.get('new_tab_id')}\n"
+                f"- 标题: {new_tab.get('title') or '(无标题)'}\n"
+                f"- 网址: {new_tab.get('url') or '(未知地址)'}\n"
+                f"【焦点已自动切换】当前操作焦点已自动切换至该新标签页。\n"
+                f"【自主清理提示】阅读完该页面内容后，请调用 bsk_tabs(action=\"close\", tab_id={new_tab.get('new_tab_id')}) 关闭此标签页并返回上一页面。"
+            )
 
         lines.append(
             "【推荐后续动作】\n"
