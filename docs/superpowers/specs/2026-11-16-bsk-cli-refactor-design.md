@@ -100,6 +100,11 @@
    - `focus(self, session: str, target: str, *, timeout_ms: int | None = None, tab_id: int | None = None, timeout: float = 30.0, raise_on_error: bool = False) -> BskResult`
    - `blur(self, session: str, target: str, *, timeout_ms: int | None = None, tab_id: int | None = None, timeout: float = 30.0, raise_on_error: bool = False) -> BskResult`
    - `wheel(self, session: str, *, delta_x: int = 0, delta_y: int = 0, target: str | None = None, modifiers: list[str] | None = None, observation_id: str | None = None, timeout_ms: int | None = None, tab_id: int | None = None, timeout: float = 30.0, raise_on_error: bool = False) -> BskResult`
+   - `drag(self, session: str, target: str, *, to_ref: str | None = None, to_selector: str | None = None, offset_x: int | None = None, offset_y: int | None = None, timeout_ms: int | None = None, tab_id: int | None = None, timeout: float = 30.0, raise_on_error: bool = False) -> BskResult`
+   - `upload(self, session: str, target: str, files: list[str] | str, *, timeout_ms: int | None = None, tab_id: int | None = None, timeout: float = 30.0, raise_on_error: bool = False) -> BskResult`
+   - `download(self, session: str, out_path: str, *, timeout_ms: int | None = None, tab_id: int | None = None, timeout: float = 60.0, raise_on_error: bool = False) -> BskResult`
+   - `wait_for_element(self, session: str, target: str, *, state: str = "visible", timeout_ms: int = 30000, tab_id: int | None = None, timeout: float = 35.0, raise_on_error: bool = False) -> BskResult`
+   - `wait_ms(self, session: str, duration_ms: int, *, tab_id: int | None = None, timeout: float = 35.0, raise_on_error: bool = False) -> BskResult`
    - `interact(self, session: str, action: str, **opts: Any) -> BskResult`：提供对动态动作名称的统一分发入口，内部校验动作合法性并组装对应子命令。
 
 4. **日志诊断与辅助**：
@@ -142,11 +147,12 @@
        tab_id: int | str,
        *,
        timeout: float = 5.0,
+       raise_on_error: bool = False,
    ) -> BskResult:
    ```
    - 获取有效的 `session_id`；
    - 顺序调度 `self._cli.select_tab` -> `self._cli.sync_tab` -> `self._cli.close_tab`；
-   - 会话销毁时清理标签以及 Service 层的标签关闭操作均调用该方法。从 `BskCli` 中移除 `close_tab_safe`。
+   - 会话销毁时清理标签传 `raise_on_error=False`，Service 层的标签关闭操作可根据需要指定 `raise_on_error`。从 `BskCli` 中移除 `close_tab_safe`。
 
 ### 5.3 Service 层改造 (`bsk/service.py`)
 
@@ -187,7 +193,16 @@
    - 例如 `act` / `interact`：
      直接调用 `self.cli.click`、`self.cli.fill` 等或委托给 `self.cli.interact`。
    - 例如 `tabs(action="close")`：
-     直接调用 `await self.sessions.close_tab_safe(session_key, tab_id)`。
+     直接调用 `await self.sessions.close_tab_safe(session_key, tab_id, raise_on_error=True)`。
+
+### 5.4 单元测试迁移与适配策略
+
+1. **白盒参数组装测试迁移**：
+   - 原先针对 `BskService._build_interact_args` 的单元测试（如 `test_interact_args.py`）迁移至 `test_cli_wrapper.py`，直接对 `BskCli` 各方法组装的命令行参数进行断言测试，提升测试层级合理性；
+2. **Service 弹性测试适配**：
+   - 原先显式 mock `service.sessions.execute` 并解构 `builder(sid)` 字符串列表的弹性测试，统一对齐至 mock `execute_action` 或断言传递给 `BskCli` 的强类型调用，避免 Service 层保留僵尸私有方法；
+3. **向后兼容性保障**：
+   - `SessionManager.execute` 保持向后兼容（内部包装后转调 `execute_action`），确保若有外部第三方或旧代码调用依然稳健运行。
 
 ---
 
