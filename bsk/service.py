@@ -2980,7 +2980,7 @@ class BskService:
             self._logger.debug("获取 Agent 标签页列表以清理失败：%r", exc)
             return
 
-        tab_list = tabs_data.get("tabs", [])
+        tab_list = tabs_data.get("tabs", []) if isinstance(tabs_data, dict) else (tabs_data if isinstance(tabs_data, list) else [])
         if not isinstance(tab_list, list) or len(tab_list) <= 1:
             return
 

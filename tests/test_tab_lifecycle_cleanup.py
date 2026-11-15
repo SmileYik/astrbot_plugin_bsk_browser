@@ -130,3 +130,43 @@ def test_session_manager_stop_entry_sweeps_tabs_from_dict_payload():
     asyncio.run(_test())
 
 
+def test_session_manager_reap_idle_cleans_extra_tabs():
+    async def _test():
+        from unittest.mock import AsyncMock, MagicMock
+        from bsk.session import SessionManager, _Entry
+        from bsk.models import BskSession
+
+        runner = MagicMock()
+        async def mock_run(args, timeout=None, **kwargs):
+            cmd = " ".join(args)
+            if "tab list" in cmd:
+                return MagicMock(data={"tabs": [{"tab_id": 1}, {"tab_id": 2}]})
+            elif "tab close" in cmd:
+                return MagicMock(data={"tab_id": 2})
+            elif "session stop" in cmd:
+                return MagicMock(data={}, exit_code=0)
+            return MagicMock(data={})
+
+        runner.run = AsyncMock(side_effect=mock_run)
+        runner.run_or_raise = AsyncMock(side_effect=mock_run)
+        clock_time = 1000.0
+        settings = MagicMock(idle_release_sec=10.0)
+        sm = SessionManager(runner, settings)
+        sm._clock = lambda: clock_time
+
+        session = BskSession(session_id="idle_sess", agent_window_id=1)
+        entry = _Entry(key="k_idle", session=session, lock=asyncio.Lock(), last_used=900.0)
+        sm._entries["k_idle"] = entry
+
+        count = await sm.reap_idle()
+        assert count == 1
+        assert "k_idle" not in sm._entries
+
+        close_calls = [call for call in runner.run.call_args_list if "close" in call[0][0]]
+        assert len(close_calls) == 1
+        assert "2" in close_calls[0][0][0] or "2" in close_calls[0][0]
+
+    asyncio.run(_test())
+
+
+
