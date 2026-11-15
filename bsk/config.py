@@ -87,51 +87,11 @@ __all__ = [
 DEFAULT_ENABLED = True
 """插件总开关。"""
 
-DEFAULT_LEGACY_TOOLS = True
-"""是否同时注册旧版工具（0.1.x 的 8 个单动作工具）。
+DEFAULT_ENABLE_STATUS = True
+"""是否向模型注册环境自检工具（``bsk_status``）。默认开启。
 
-默认开启，因为它是**向后兼容开关**：老用户可能已在 prompt、
-工作流或习惯里用着 ``bsk_open``/``bsk_read``/``bsk_act`` 这些名字，
-默认关掉等于静默删掉旧工具。想要更省上下文的用户可以显式关掉。
-
-**关掉能省多少，取决于旧工具当时注册了几个**（两者共同决定）：
-
-- 默认配置（``legacy_fringe_tools=false``）：只停用常驻的 4 个，
-  每轮约省 1700 字符（实测 google/anthropic/openai = 1631/1739/1803）；
-- 若同时开着 ``legacy_fringe_tools=true``：8 个全停，
-  每轮约省 3600 字符（实测 3572/3752/3864）。
-
-注意：``bsk_evaluate`` 不受本开关影响 —— 它有独立的
-``enable_evaluate``，是高风险工具，语义不同。
-
-本项关掉时会把**全部** 7 个旧工具停掉，包括常用且没有替代品的
-``bsk_status`` / ``bsk_close`` / ``bsk_logs``。
-只想去掉那 3 个"有新工具等价替代"的罕见工具，请保持本项开启，
-改关 :data:`DEFAULT_LEGACY_FRINGE_TOOLS`。
-"""
-
-DEFAULT_LEGACY_FRINGE_TOOLS = False
-"""是否同时注册旧版工具里的「罕见」那三个（``bsk_open``/``bsk_read``/``bsk_act``）。
-
-**只在 ``legacy_tools=true`` 时才有意义**：``legacy_tools=false`` 会把 8 个旧工具
-全部停掉，那时本项填什么都不影响结果。
-
-默认 **False**，即默认不注册这三个。理由是它们各自都有等价的新工具
-（``bsk_open`` → ``bsk_page``/``bsk_session``、``bsk_read`` → ``bsk_inspect``、
-``bsk_act`` → ``bsk_interact``），而且它们的 docstring 早已写明
-"兼容保留，新用法请优先用新工具"。所以关掉它们不会失去任何能力，
-只是让仍在用旧写法的 prompt 失效 —— 需要那三个名字的用户把它改成 True 即可。
-
-代价/收益：关掉后每轮对话少带 3 份工具说明（实测 google/anthropic/openai
-= 1941/2013/2061 字符，见 README 的实测表），模型不再能调用
-``bsk_open`` / ``bsk_read`` / ``bsk_act``。
-
-与 ``legacy_tools`` 的分工：后者管的是"旧工具整体要不要"，本项管的是
-"旧工具里最没用的那一小撮要不要"。常用且**没有替代品**的 3 个
-（``bsk_status`` 诊断、``bsk_close`` 关会话、``bsk_logs`` 读日志）
-刻意归在常驻组，只要 ``legacy_tools=true`` 就一定注册。
-
-不受本项影响：``bsk_evaluate``（有独立的 ``enable_evaluate``）。
+开启后向模型注册 ``bsk_status`` 工具，用于检查 bsk 命令行、浏览器扩展连接及会话状态。
+若不需要可关闭以节省模型提示词。
 """
 
 DEFAULT_LAZY_DEBUG_TOOL = True
@@ -668,20 +628,8 @@ class Settings:
     enabled: bool
     """插件总开关。关闭后所有工具直接拒绝调用。"""
 
-    legacy_tools: bool
-    """是否同时注册旧版工具（0.1.x 的 8 个单动作工具）。
-
-    默认 ``True``（向后兼容）。关掉后只剩多动作工具，代价是模型不能再
-    调用旧工具名。**省下多少取决于旧工具当时注册了几个**：默认配置下
-    只停常用的 4 个（约 1700 字符）；若同时开着 :attr:`legacy_fringe_tools`，
-    则 8 个全停（约 3600 字符）。
-
-    注意它会**连带停掉**常用的 ``bsk_status`` / ``bsk_close`` /
-    ``bsk_logs``，只想去掉罕见的那三个请改关
-    :attr:`legacy_fringe_tools`。
-
-    不受本项影响：``bsk_evaluate``（有独立的 ``enable_evaluate``）。
-    """
+    enable_status: bool
+    """是否向模型注册环境自检工具（``bsk_status``）。默认 True。"""
 
     bsk_path: str
     """bsk 可执行文件路径。裸名字（如 ``bsk``）表示从 PATH 查找，否则视为绝对/相对路径。"""
@@ -768,21 +716,6 @@ class Settings:
     详见 :data:`DEFAULT_ENABLE_REQUEST_ID`。
     """
 
-    legacy_fringe_tools: bool
-    """是否同时注册旧版工具里的「罕见」那三个。
-    （``bsk_open`` / ``bsk_read`` / ``bsk_act``，默认 ``False``。）
-
-    **只在 :attr:`legacy_tools` 为 True 时才有意义** —— 后者关掉会把 8 个旧工具
-    全部停掉，本项填什么都不影响结果。
-
-    这三个都有等价的新工具，默认不注册可省约 1900 字符的 prompt
-    （实测 google/anthropic/openai = 1941/2013/2061，取最小值取整）。
-    常用且无替代品的 3 个（``bsk_status`` / ``bsk_close`` /
-    ``bsk_logs``）归常驻组，不受本项影响；``bsk_evaluate`` 有独立开关，同样不受影响。
-
-    详见 :data:`DEFAULT_LEGACY_FRINGE_TOOLS`。
-    """
-
     lazy_debug_tool: bool
     """``bsk_debug`` 是否改成按需加载。默认 ``True``。
 
@@ -832,7 +765,7 @@ def parse_settings(raw: dict | None, *, data_dir: str = "") -> Settings:
     journal_path = raw.get("journal_path")
     return Settings(
         enabled=_as_bool(raw.get("enabled"), DEFAULT_ENABLED),
-        legacy_tools=_as_bool(raw.get("legacy_tools"), DEFAULT_LEGACY_TOOLS),
+        enable_status=_as_bool(raw.get("enable_status"), DEFAULT_ENABLE_STATUS),
         bsk_path=_as_str(raw.get("bsk_path"), DEFAULT_BSK_PATH),
         browser_instance_id=_as_str(
             raw.get("browser_instance_id"), DEFAULT_BROWSER_INSTANCE_ID
@@ -891,12 +824,6 @@ def parse_settings(raw: dict | None, *, data_dir: str = "") -> Settings:
         ),
         enable_request_id=_as_bool(
             raw.get("enable_request_id"), DEFAULT_ENABLE_REQUEST_ID
-        ),
-        # 默认 False 意味着"用户没填这一项"与"用户明确关掉"是同一个结果：
-        # 那三个罕见旧工具的等价替代早就有了，新装/升级的用户不该默认背上
-        # 这份 prompt 开销。它与 legacy_tools 的组合语义由 main.py 落地。
-        legacy_fringe_tools=_as_bool(
-            raw.get("legacy_fringe_tools"), DEFAULT_LEGACY_FRINGE_TOOLS
         ),
         # 默认 True 是**省上下文**的那一侧：bsk_debug 的 schema 有 4431 字符，
         # 而它只在真的抓包时才有用。用户没填这一项 = 接受"先 bsk_load_tools
