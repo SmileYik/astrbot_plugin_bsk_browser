@@ -3322,5 +3322,53 @@ class TestRecoverOrphansByRequest(TestJournalIntegration):
         self.assertEqual(self.journal.load(), [])
 
 
+class TestSessionLifecycleLogging(unittest.IsolatedAsyncioTestCase):
+    """测试 SessionManager 各生命周期节点的结构化 DEBUG 日志。"""
+
+    async def test_session_lifecycle_logs(self) -> None:
+        from tests.test_logger_injection import RecordingLogger
+
+        rec = RecordingLogger()
+        runner = FakeRunner()
+        settings = make_settings(max_sessions=2, idle_release_sec=1.0)
+        manager = SessionManager(runner, settings, logger=rec)
+
+        # 1. acquire 会触发启动与获取日志
+        session = await manager.acquire("umo-1")
+        self.assertTrue(session.is_valid())
+        rendered = rec.rendered()
+        self.assertIn("[会话启动]", rendered)
+        self.assertIn("[会话获取]", rendered)
+
+        # 2. release 会触发关闭与释放日志
+        await manager.release("umo-1")
+        rendered = rec.rendered()
+        self.assertIn("[会话关闭]", rendered)
+        self.assertIn("[会话释放]", rendered)
+
+    async def test_reap_idle_and_evict_logs(self) -> None:
+        from tests.test_logger_injection import RecordingLogger
+
+        rec = RecordingLogger()
+        runner = FakeRunner()
+        settings = make_settings(max_sessions=1, idle_release_sec=0.01)
+        manager = SessionManager(runner, settings, logger=rec)
+
+        # 启动一个会话
+        await manager.acquire("umo-1")
+        # 淘汰：容量为 1，acquire 另一个会触发容量淘汰
+        await manager.acquire("umo-2")
+        rendered = rec.rendered()
+        self.assertIn("[会话容量淘汰]", rendered)
+
+        # 超时回收
+        await asyncio.sleep(0.02)
+        reaped = await manager.reap_idle()
+        self.assertEqual(reaped, 1)
+        rendered = rec.rendered()
+        self.assertIn("[会话超时]", rendered)
+        self.assertIn("[会话超时回收完成]", rendered)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main(verbosity=2)

@@ -738,6 +738,13 @@ class SessionManager:
         async with self._locked_entry(key) as entry:
             await self._ensure_session(entry, start_args=extra)
             self._touch(entry)
+            self._logger.debug(
+                "[会话获取] key=%s, 会话ID=%s, 窗口ID=%s | 当前总会话数: %d",
+                key,
+                entry.session.session_id or "(未建立)",
+                entry.session.agent_window_id,
+                self._active_session_count(),
+            )
             return entry.session
 
     async def execute(
@@ -858,6 +865,12 @@ class SessionManager:
         if entry is None:
             return False
         entry.closed = True
+        self._logger.debug(
+            "[会话释放] 释放会话 key=%s (会话ID=%s) | 剩余槽位数: %d",
+            key,
+            entry.session.session_id or "(未建立)",
+            len(self._entries),
+        )
         try:
             await self._wait_idle(entry, RELEASE_WAIT_SEC)
             return await self._stop_entry(entry)
@@ -918,12 +931,24 @@ class SessionManager:
                 if popped is not None:
                     popped.closed = True
                     victims.append(popped)
+                    self._logger.debug(
+                        "[会话超时] 会话 %s (key=%s) 空闲超时 (已空闲 %.1fs >= 阈值 %.1fs) 执行回收",
+                        popped.session.session_id or "(未建立)",
+                        key,
+                        now - entry.last_used,
+                        self._idle_release_sec,
+                    )
 
         if not victims:
             return 0
         count = await self._shutdown_entries(victims)
         self._counters["reaped"] += count
         self._logger.info("空闲回收了 %d 个浏览器会话", count)
+        self._logger.debug(
+            "[会话超时回收完成] 共回收 %d 个超时会话 | 剩余活跃会话数: %d",
+            count,
+            self._active_session_count(),
+        )
         return count
 
     async def recover_orphans(self) -> int:
@@ -964,6 +989,7 @@ class SessionManager:
         if journal is None:
             return 0
 
+        self._logger.debug("[孤儿会话检查] 开始检查遗留孤儿会话...")
         try:
             recorded = journal.load()
         except Exception as exc:  # noqa: BLE001 - journal 自身已经吞异常，这里再兜一层
@@ -1009,6 +1035,11 @@ class SessionManager:
                 continue
             if await self._stop_session_id(entry.session_id):
                 stopped += 1
+                self._logger.debug(
+                    "[孤儿会话清理] 清理遗留孤儿会话 %s (窗口ID=%s)",
+                    entry.session_id,
+                    entry.agent_window_id,
+                )
             else:
                 skipped += 1
 
@@ -1021,6 +1052,11 @@ class SessionManager:
         # 无论停成功几个都清空：这些记录属于已经退出的进程，
         # 留着只会让每次启动都重复做同一轮无用功。
         self._journal_clear()
+        self._logger.debug(
+            "[孤儿清理完成] 共清理 %d 个遗留会话与请求 | 当前会话槽位: %d",
+            stopped,
+            len(self._entries),
+        )
         return stopped
 
     async def _recover_by_request(
@@ -1070,6 +1106,7 @@ class SessionManager:
                     self._journal_remove_by_request(token)
                     stopped += 1
                     self._counters["request_orphans_cancelled"] += 1
+                    self._logger.debug("[孤儿请求清理] 回收遗留未认领请求 token=%s", token)
                 else:
                     remaining.append(entry)  # 未确认 → 保留
                 continue
@@ -1133,6 +1170,10 @@ class SessionManager:
             "counters": dict(self._counters),
             "recent_stop_errors": list(self._recent_stop_errors),
         }
+
+    def _active_session_count(self) -> int:
+        """当前具有有效 session_id 的活跃会话数。"""
+        return sum(1 for e in self._entries.values() if e.session.session_id)
 
     async def close(self) -> None:
         """释放全部资源（等价 ``release_all`` + 清理内部状态）。
@@ -1417,6 +1458,14 @@ class SessionManager:
             session.session_id,
             session.browser_instance_id or browser_id or "默认",
         )
+        self._logger.debug(
+            "[会话启动] 会话 %s 建立完成 | 浏览器: %s, 窗口ID: %s | 当前活跃会话数: %d/%d",
+            session.session_id,
+            session.browser_instance_id or browser_id or "默认",
+            session.agent_window_id,
+            self._active_session_count() + 1,
+            self._max_sessions,
+        )
         return session
 
     # ------------------------------------------------------------------
@@ -1533,6 +1582,12 @@ class SessionManager:
         这一步**不开任何窗口**（实测返回 ``session: null``），它的价值是让 daemon
         先认下令牌 —— 之后 start 的回执即使丢了，也能凭令牌反查出那次启动造出的会话。
         """
+        self._logger.debug(
+            "[会话准备] 准备启动请求 token=%s | 当前活跃会话数: %d, 槽位数: %d",
+            request_id,
+            self._active_session_count(),
+            len(self._entries),
+        )
         data = await self._request_command(
             ["session", "request", request_id, "--prepare", "--json"],
             request_id=request_id,
@@ -1550,6 +1605,10 @@ class SessionManager:
 
     async def _claim_request(self, request_id: str) -> None:
         """``--claim``：把这次启动**认领**下来，从此它不再被 daemon 的到期回收关掉。"""
+        self._logger.debug(
+            "[会话认领] 认领启动请求 token=%s",
+            request_id,
+        )
         data = await self._request_command(
             ["session", "request", request_id, "--claim", "--json"],
             request_id=request_id,
@@ -1574,6 +1633,7 @@ class SessionManager:
         """
         if not request_id:
             return False
+        self._logger.debug("[会话取消] 取消未认领启动请求 token=%s", request_id)
         try:
             data = await self._request_command(
                 ["session", "request", request_id, "--cancel", "--json"],
@@ -1824,6 +1884,11 @@ class SessionManager:
                     )
                 else:
                     self._logger.debug("会话 %s 已不存在，无需停止", session_id)
+                self._logger.debug(
+                    "[会话关闭] 会话 %s 已确认不存在 | 剩余活跃会话数: %d",
+                    session_id,
+                    self._active_session_count(),
+                )
                 return True
             except Exception as exc:  # noqa: BLE001 - 清理路径吞掉一切
                 last_exc = exc
@@ -1868,6 +1933,11 @@ class SessionManager:
                     )
                 else:
                     self._logger.info("已停止浏览器会话 %s", session_id)
+                self._logger.debug(
+                    "[会话关闭] 关闭会话 %s 完成 | 剩余活跃会话数: %d",
+                    session_id,
+                    self._active_session_count(),
+                )
                 return True
 
         self._counters["stop_failed"] += 1
@@ -1966,6 +2036,14 @@ class SessionManager:
                 self._max_sessions,
                 popped.session.session_id or "(未建立)",
                 victim_key,
+            )
+            self._logger.debug(
+                "[会话容量淘汰] 会话池已满 (%d/%d)，按 LRU 淘汰会话 %s (key=%s, 空闲 %.1fs)",
+                len(self._entries) + 1,
+                self._max_sessions,
+                popped.session.session_id or "(未建立)",
+                victim_key,
+                self._clock() - popped.last_used,
             )
             del victim  # 仅为可读性
         return evicted
