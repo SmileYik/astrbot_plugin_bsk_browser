@@ -48,7 +48,9 @@ def is_action_allowed(allowed_actions: Sequence[str], tool: str, action: str) ->
     """判断 tool.action 是否在 allowed_actions 中。"""
     tool_clean = str(tool or "").strip().lower()
     action_clean = str(action or "").strip().lower()
+    action_alt = action_clean.replace("-", "_") if "-" in action_clean else action_clean.replace("_", "-")
     full_act = f"{tool_clean}.{action_clean}"
+    full_alt = f"{tool_clean}.{action_alt}"
 
     for rule in allowed_actions:
         r = str(rule or "").strip().lower()
@@ -56,9 +58,9 @@ def is_action_allowed(allowed_actions: Sequence[str], tool: str, action: str) ->
             continue
         if r in ("*", "*.*"):
             return True
-        if r == full_act:
+        if r in (full_act, full_alt):
             return True
-        if r in (action_clean, f"*.{action_clean}"):
+        if r in (action_clean, action_alt, f"*.{action_clean}", f"*.{action_alt}"):
             return True
         if r in (tool_clean, f"{tool_clean}.*"):
             return True

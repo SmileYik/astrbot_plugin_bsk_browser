@@ -52,7 +52,7 @@ class TestToolLogging(unittest.IsolatedAsyncioTestCase):
         self.assertIn("sender=10001", start_log)
         self.assertIn("'action': 'list'", start_log)
 
-        finish_log = debug_logs[1].render()
+        finish_log = debug_logs[-1].render()
         self.assertIn("[工具调用结束]", finish_log)
         self.assertIn("工具: bsk_session", finish_log)
         self.assertIn("耗时:", finish_log)
@@ -73,7 +73,7 @@ class TestToolLogging(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[工具调用开始]", start_log)
         self.assertIn("工具: bsk_status", start_log)
 
-        finish_log = debug_logs[1].render()
+        finish_log = debug_logs[-1].render()
         self.assertIn("[工具调用结束]", finish_log)
         self.assertIn("工具: bsk_status", finish_log)
 
@@ -102,7 +102,7 @@ class TestToolLogging(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[工具调用开始]", start_log)
         self.assertIn("工具: bsk_inspect", start_log)
 
-        finish_log = debug_logs[1].render()
+        finish_log = debug_logs[-1].render()
         self.assertIn("[工具调用结束]", finish_log)
         self.assertIn("工具: bsk_inspect", finish_log)
         self.assertIn("状态: 成功", finish_log)
@@ -123,7 +123,7 @@ class TestToolLogging(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[工具调用开始]", start_log)
         self.assertIn("sender=9999", start_log)
 
-        finish_log = debug_logs[1].render()
+        finish_log = debug_logs[-1].render()
         self.assertIn("[工具调用结束]", finish_log)
         self.assertIn("仅管理员可用", finish_log)
 
@@ -138,7 +138,7 @@ class TestToolLogging(unittest.IsolatedAsyncioTestCase):
 
         debug_logs = [r for r in self.logger.records if r.level == "debug"]
         self.assertGreaterEqual(len(debug_logs), 2)
-        finish_log = debug_logs[1].render()
+        finish_log = debug_logs[-1].render()
         self.assertIn("[工具调用结束]", finish_log)
         self.assertIn("状态: 异常", finish_log)
         self.assertIn("critical tool failure", finish_log)
@@ -158,7 +158,7 @@ class TestToolLogging(unittest.IsolatedAsyncioTestCase):
 
         debug_logs = [r for r in self.logger.records if r.level == "debug"]
         self.assertGreaterEqual(len(debug_logs), 2)
-        finish_log = debug_logs[1].render()
+        finish_log = debug_logs[-1].render()
         self.assertIn("[工具调用结束]", finish_log)
 
     async def test_tool_start_log_truncates_large_args(self) -> None:

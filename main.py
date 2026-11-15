@@ -51,10 +51,30 @@ from .bsk.logger import (
     truncate_log_text,
 )
 from .bsk.models import ConsoleLog
+from .bsk.permissions import check_site_permission, normalize_domain
 from .bsk.service import BskService
 from .bsk.tools import BskToolError
 
 __all__ = ["BskBrowserPlugin"]
+
+DANGEROUS_TOOL_NAMES = frozenset(
+    {"bsk_load_tools", "bsk_debug", "bsk_assist", "bsk_status", "bsk_evaluate"}
+)
+"""非管理员用户严禁访问的高危与内部工具集。"""
+
+LIFECYCLE_ACTIONS = frozenset(
+    {
+        ("bsk_session", "start"),
+        ("bsk_session", "stop"),
+        ("bsk_session", "list"),
+        ("bsk_session", "sync"),
+        ("bsk_tabs", "list"),
+        ("bsk_tabs", "select"),
+        ("bsk_tabs", "close"),
+    }
+)
+"""对普通用户基础放行的会话与标签页生命周期动作（防死锁与支持正常退出）。"""
+
 
 # 插件自己的名字。用于解析插件数据目录，必须与 metadata.yaml 的 name 一致。
 # 显式写死是刻意的：``StarTools.get_data_dir()`` 不带名字时会去猜调用方模块，
@@ -808,6 +828,137 @@ class BskBrowserPlugin(Star):
     # 权限与会话键
     # ------------------------------------------------------------------
 
+    def _audit_log(
+        self,
+        sender: str,
+        session_key: str,
+        domain: str,
+        tool: str,
+        action: str,
+        result: str,
+        reason: str,
+    ) -> None:
+        """记录细粒度权限审计日志（DEBUG 等级）。"""
+        target_logger = getattr(self, "_plugin_logger", None) or astrbot_logger
+        target_logger.debug(
+            "[权限审计] sender=%s session=%s domain=%s tool=%s action=%s result=%s reason=%s",
+            sender or "-",
+            session_key or "-",
+            domain or "-",
+            tool or "-",
+            action or "-",
+            result,
+            reason,
+        )
+
+    async def _check_call_permission(
+        self,
+        tool: str,
+        action: str,
+        event: AstrMessageEvent,
+        raw_args: dict,
+    ) -> str | None:
+        """统一的细粒度工具调用权限门禁。返回错误文案表示拒绝，返回 None 表示放行。"""
+        tool_clean = str(tool or "").strip().lower()
+        action_clean = str(action or "").strip().lower()
+
+        if not self.settings.enabled:
+            return "浏览器操作已在插件配置中停用。"
+
+        sender = ""
+        try:
+            sender = str(event.get_sender_id() or "")
+        except Exception:
+            sender = ""
+
+        key = str(raw_args.get("session") or "").strip() or self._key(event)
+        is_admin = self._safe_is_admin(event)
+
+        # 自助排查例外：bsk_session 的 list 纯只读列出会话，允许非管理员自查
+        is_self_serve = tool_clean == "bsk_session" and action_clean == "list"
+
+        # 1. 用户白名单检查（若配置了 allowed_users）
+        allowed_users = self.settings.allowed_users
+        if allowed_users and not is_self_serve:
+            if not (is_admin or (sender and sender in allowed_users)):
+                msg = (
+                    "你没有使用浏览器操作的权限。"
+                    "（该插件配置了用户白名单，请联系管理员把你的 ID 加进去。）"
+                )
+                self._audit_log(sender, key, "", tool_clean, action_clean, "DENY", msg)
+                return msg
+
+        # 2. 若启用了 admin_only，且调用者不是管理员
+        if self.settings.admin_only and not is_admin and not is_self_serve:
+            msg = (
+                "浏览器操作仅限管理员使用。"
+                f"你的 ID 是 {sender or '未知'}，可以请管理员在插件配置里"
+                "把「仅管理员可用」关掉，或把你的 ID 加进白名单。"
+            )
+            self._audit_log(sender, key, "", tool_clean, action_clean, "DENY", msg)
+            return msg
+
+        # 3. 管理员权限放行
+        if is_admin:
+            if tool_clean == "bsk_evaluate":
+                denied = self._evaluate_denied(event)
+                if denied:
+                    self._audit_log(sender, key, "", tool_clean, action_clean, "DENY", denied)
+                    return denied
+            self._audit_log(sender, key, "*", tool_clean, action_clean, "ALLOW", "管理员直接放行")
+            return None
+
+        # 4. 普通用户（非管理员）处理
+        # 4.1 高危与内部工具硬性双层隔离
+        if tool_clean in DANGEROUS_TOOL_NAMES:
+            reason = f"高危/内部工具 {tool_clean} 严禁普通用户使用"
+            self._audit_log(sender, key, "", tool_clean, action_clean, "DENY", reason)
+            return f"该高级浏览器工具（{tool_clean}）仅限管理员使用。"
+
+        # 4.2 基础生命周期操作放行（防死锁与支持正常退出）
+        # 特别注意：bsk_session.start 若携带非空 url，不能仅作为无害生命周期动作放行，需校验其目标域名
+        if (tool_clean, action_clean) in LIFECYCLE_ACTIONS:
+            start_url = str(raw_args.get("url") or "").strip()
+            if not (tool_clean == "bsk_session" and action_clean == "start" and start_url):
+                self._audit_log(sender, key, "", tool_clean, action_clean, "ALLOW", "生命周期基础操作放行")
+                return None
+
+        # 4.3 导航类操作（open / navigate / start 带 url）
+        is_navigation = (
+            (tool_clean == "bsk_page" and action_clean == "navigate")
+            or (tool_clean == "bsk_session" and action_clean == "open")
+            or (tool_clean == "bsk_session" and action_clean == "start" and bool(raw_args.get("url")))
+        )
+        if is_navigation:
+            target_url = str(raw_args.get("url") or "").strip()
+            ok, msg = check_site_permission(
+                self.settings.site_whitelist, target_url, tool_clean, action_clean
+            )
+            target_domain = normalize_domain(target_url)
+            if not ok:
+                self._audit_log(sender, key, target_domain, tool_clean, action_clean, "DENY", msg)
+                return msg
+            self._audit_log(sender, key, target_domain, tool_clean, action_clean, "ALLOW", "目标域名在白名单中")
+            return None
+
+        # 4.4 页内操作鉴权（感知当前真实 URL）
+        try:
+            current_url = await self.service.get_active_url(key)
+        except Exception as exc:
+            astrbot_logger.debug("获取当前活动 URL 失败: %r", exc)
+            current_url = ""
+
+        current_domain = normalize_domain(current_url)
+        ok, msg = check_site_permission(
+            self.settings.site_whitelist, current_url, tool_clean, action_clean
+        )
+        if not ok:
+            self._audit_log(sender, key, current_domain, tool_clean, action_clean, "DENY", msg)
+            return msg
+
+        self._audit_log(sender, key, current_domain, tool_clean, action_clean, "ALLOW", "白名单动作允许")
+        return None
+
     def _denied(self, event: AstrMessageEvent) -> str | None:
         """权限校验。返回错误文案表示拒绝，返回 None 表示放行。
 
@@ -987,20 +1138,11 @@ class BskBrowserPlugin(Star):
             还会把 ``event.send`` 里的错误提示发给用户。
         """
         # --- 第 1 步：权限门 ---
-        # bsk_session 的 list 是纯本地只读（只列本插件自己建的会话），
-        # 与 bsk_status 同一性质：它是用户"我这边还能用吗"的自助排查手段，
-        # 拒掉它只会让人更没法自查。所以和 bsk_status 一样允许非管理员。
-        # 注意先做一次**归一化**再判断 action：模型可能写 "List"、拼错大小写，
-        # 也可能带上连字符写法，归一化后才是可以比较的形式。
         peek = tools_mod.normalize_args(raw)
-        self_serve = tool == "bsk_session" and peek.get("action") == "list"
-        if not self_serve:
-            denied = self._denied(event)
-            if denied:
-                return self._fail(denied)
-        elif not self.settings.enabled:
-            # list 放行的是 admin_only / 白名单，不是总开关。
-            return self._fail("浏览器操作已在插件配置中停用。")
+        action = str(peek.get("action") or "").lower()
+        denied = await self._check_call_permission(tool, action, event, peek)
+        if denied:
+            return self._fail(denied)
 
         # --- 第 2 步：参数校验 ---
         # BskToolError 的 message 本身就是写好的中文提示（"哪里错了、
@@ -1964,13 +2106,13 @@ class BskBrowserPlugin(Star):
         screenshot 截图并直接把图片发给用户（支持 full_page=True 截取长页面）；
         console / network 支持 since 游标增量读。要抓包、控制流量改用 bsk_debug。
         """
-        denied = self._denied(event)
+        peek = tools_mod.normalize_args(kwargs)
+        action = str(peek.get("action") or "").lower()
+
+        denied = await self._check_call_permission("bsk_inspect", action, event, peek)
         if denied:
             yield self._fail(denied)
             return
-
-        peek = tools_mod.normalize_args(kwargs)
-        action = peek.get("action")
 
         if action == "screenshot":
             try:
@@ -2103,9 +2245,9 @@ class BskBrowserPlugin(Star):
 
         Args:
         """
-        # 诊断不涉及浏览器操作，但仍受总开关约束；且允许非管理员查看（便于自助排查）。
-        if not self.settings.enabled:
-            return self._fail("浏览器操作已在插件配置中停用。")
+        denied = await self._check_call_permission("bsk_status", "status", event, {})
+        if denied:
+            return self._fail(denied)
 
         try:
             info = await self.service.status(self._key(event))
@@ -2208,8 +2350,9 @@ class BskBrowserPlugin(Star):
         Args:
             expression(string): 要执行的 JavaScript 表达式，例如 document.title。求值成 undefined 时返回"没有值"
         """
-        # 三条权限分支都在 _evaluate_denied 里，顺序即设计（见它的 docstring）。
-        denied = self._evaluate_denied(event)
+        denied = await self._check_call_permission(
+            "bsk_evaluate", "evaluate", event, {"expression": expression}
+        )
         if denied:
             return self._fail(denied)
 
@@ -2228,5 +2371,30 @@ class BskBrowserPlugin(Star):
         except Exception as exc:  # noqa: BLE001
             astrbot_logger.exception("[bsk_browser] bsk_evaluate 未预期错误")
             return self._fail(f"执行脚本时出现未预期的错误：{exc}")
+
+    @filter.on_llm_request()
+    async def on_llm_request(self, event: AstrMessageEvent, req: Any) -> None:
+        """非管理员请求过滤：剥离高危/内部工具，防范提示词投毒并降低 Token 消耗。"""
+        if not self.settings.enabled:
+            return
+        if self._safe_is_admin(event):
+            return
+
+        func_tool = getattr(req, "func_tool", None)
+        if func_tool is None:
+            return
+
+        for name in DANGEROUS_TOOL_NAMES:
+            if hasattr(func_tool, "remove_tool"):
+                try:
+                    func_tool.remove_tool(name)
+                except Exception:
+                    pass
+        if hasattr(func_tool, "tools") and isinstance(func_tool.tools, list):
+            func_tool.tools = [
+                t for t in func_tool.tools
+                if getattr(t, "name", "") not in DANGEROUS_TOOL_NAMES
+            ]
+
 
 

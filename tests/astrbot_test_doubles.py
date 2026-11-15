@@ -188,6 +188,12 @@ def ensure_astrbot_modules() -> None:
 
             return dec
 
+        def on_llm_request(self, *a, **k):
+            def dec(f):
+                return f
+
+            return dec
+
     filter = Filter()
 
     class StarTools:
