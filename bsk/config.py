@@ -49,6 +49,7 @@ __all__ = [
     "DEFAULT_LAZY_DEBUG_TOOL",
     "DEFAULT_LEGACY_FRINGE_TOOLS",
     "DEFAULT_LEGACY_TOOLS",
+    "DEFAULT_LLM_PROMPT_INJECTION",
     "DEFAULT_LOG_FILE_PATH",
     "DEFAULT_LOG_MAX_OUTPUT_LENGTH",
     "DEFAULT_MAX_PAGE_CHARS",
@@ -97,6 +98,9 @@ __all__ = [
 
 DEFAULT_ENABLED = True
 """插件总开关。"""
+
+DEFAULT_LLM_PROMPT_INJECTION = ""
+"""LLM 提示词注入内容。当具有浏览器操作权限时追加到 system_prompt 中；留空不注入。"""
 
 DEFAULT_ENABLE_STATUS = True
 """是否向模型注册环境自检工具（``bsk_status``）。默认开启。
@@ -819,6 +823,9 @@ class Settings:
     site_whitelist: tuple[dict[str, Any], ...]
     """普通用户网站与操作白名单。"""
 
+    llm_prompt_injection: str
+    """LLM提示词注入内容。"""
+
 
 
 
@@ -949,6 +956,9 @@ def parse_settings(raw: dict | None, *, data_dir: str = "") -> Settings:
             )
         ),
         site_whitelist=_parse_site_whitelist(raw.get("site_whitelist")),
+        llm_prompt_injection=_as_str(
+            raw.get("llm_prompt_injection"), DEFAULT_LLM_PROMPT_INJECTION
+        ),
     )
 
 

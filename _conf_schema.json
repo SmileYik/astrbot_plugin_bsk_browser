@@ -5,6 +5,12 @@
     "default": true,
     "hint": "关闭后机器人不再注册任何浏览器操作工具，已有的浏览器会话会在插件重载时释放。调试或临时停用时可以关掉它，不必卸载插件。"
   },
+  "llm_prompt_injection": {
+    "description": "LLM提示词注入",
+    "type": "text",
+    "default": "",
+    "hint": "当前用户具备浏览器操作权限时追加到系统提示词中；留空则不注入。"
+  },
   "bsk_path": {
     "description": "bsk 命令位置",
     "type": "string",

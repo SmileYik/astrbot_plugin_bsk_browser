@@ -74,6 +74,11 @@ class TestDefaults(unittest.TestCase):
         self.assertEqual(s.idle_release_sec, 240.0)
         self.assertEqual(s.screenshot_dir, "")
         self.assertEqual(s.max_page_chars, 3000)
+        self.assertEqual(s.llm_prompt_injection, "")
+
+    def test_prompt_injection_parsed_and_trimmed(self) -> None:
+        s = parse_settings({"llm_prompt_injection": "  请优先使用浏览器搜索  "})
+        self.assertEqual(s.llm_prompt_injection, "请优先使用浏览器搜索")
 
     def test_timeout_below_astrbot_limit(self) -> None:
         """默认超时必须明显小于 AstrBot 的 120 秒工具调用上限。"""
