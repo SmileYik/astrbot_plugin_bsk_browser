@@ -416,7 +416,7 @@ def classify(
     if code:
         friendly = f"操作失败：{detail}"
     elif stderr.strip():
-        friendly = f"命令参数有误：{stderr.strip()[:200]}"
+        friendly = f"命令参数异常（疑似 bug）：{stderr.strip()[:200]}"
     else:
         friendly = f"操作失败（退出码 {exit_code}）：{detail}"
 

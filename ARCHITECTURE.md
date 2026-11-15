@@ -1,6 +1,7 @@
 # astrbot_plugin_bsk_browser — 架构与实施方案
 
-> 版本：v0.3.1（8 个主工具 + 8 个兼容旧工具；默认只注册 12 个）
+> 版本：v0.3.1（8 个主工具 + 2 个独立扩展工具；默认注册 8 个）
+> 作者：JosephTian876, SmileYik
 > 目标读者：实现该插件的工程师（含 subagent）
 > 依据：本仓库外的调研资料（6 份调研报告，未随仓库分发）+ 本机实测
 >
@@ -54,6 +55,7 @@
 │  main.py   ← 唯一的框架耦合层（必须叫 main.py，见 C1）      │
 │  · BskBrowserPlugin(Star)  插件类、配置读取、生命周期钩子   │
 │  · @filter.llm_tool 薄适配函数（必须在此，见 C2）           │
+│  · @filter.on_llm_request 请求钩子（提示词注入与高危工具裁剪）│
 │  · 从 astrbot.api 取 logger 与插件数据目录，向下注入         │
 │    职责仅：参数解包 → 调用 bsk/ 服务 → 转成框架返回值        │
 └───────────────────────┬──────────────────────────────────┘
@@ -191,16 +193,29 @@ L1 page
 - 定期清理，避免磁盘无限增长
 - 给 LLM 前考虑降采样（1850×1208 的原图很贵）
 
-### 4.6 `bsk/config.py`
+### 4.6 `bsk/config.py` 与配置管理
 
 把 AstrBot 传来的原始 dict 转成强类型 `Settings`，对每一项做类型校验和兜底（配置可能被用户填成任何东西）。
 
-`Settings` 另有一个**注入项**（不是用户配置项）`data_dir`：插件数据目录，由 `main.py` 传入。
+`Settings` 包含常规用户配置项及一个**注入项**（非用户配置项）`data_dir`：插件数据目录，由 `main.py` 传入。
 空串表示"未注入"，此时 journal 与截图走临时目录降级。它**不**写进 `_conf_schema.json` ——
 用户不该也无法在配置页填它。`parse_settings(raw, *, data_dir="")` 以关键字参数接收。
 
 用户显式配置的 `screenshot_dir` / `journal_path` **优先级最高且不变**：填了就一律用用户填的，
 注入的 `data_dir` 不得覆盖它。
+
+长文本配置项 `llm_prompt_injection`（默认值为空字符串）：
+- 类型为 `text`，对应 AstrBot WebUI 中的“LLM提示词注入”长文本配置区；
+- 若该选项为空则不执行任何注入；
+- 遵循权限守卫：仅当当前请求发起者具备浏览器操作权限（`self._denied(event) is None`）时，才将其注入至系统提示词；
+- 注入时自动处理换行衔接：原系统提示词为空时直接赋值，非空时以两个换行符 `\n\n` 拼接。
+
+### 4.6.1 提示文本精炼与 Token 控制原则
+
+所有面向用户与面向 LLM 的提示文本（含 `_conf_schema.json` 中的 `hint`/`description`、`metadata.yaml` 中的模块化描述、`bsk/tools.py` 中的工具与属性描述、`bsk/errors.py` 中的友好报错、`bsk/config.py` 的警告文案及 `main.py` 权限拒绝提示）均遵循**紧凑凝练、一目了然**的原则：
+1. **语义精准不冗长**：删减过度铺垫与重复陈述，直奔行为、边界与下一步操作；
+2. **Token 开销最小化**：工具描述与错误回显均进入 LLM 提示词上下文，通过精炼文案显著降低多轮对话中的上下文消耗；
+3. **保留核心关键词与操作路径**：严格保留模型决策必需的指令依据（如错误恢复建议、工具触发条件、排查命令）。
 
 ### 4.7 `bsk/logger.py` 与 `bsk/paths.py`
 
@@ -647,6 +662,22 @@ self._journal_add(fresh)           # ← 永远执行不到
 **代价**：每次建立新会话多两条命令（prepare + claim），实测约多花 80 毫秒，只在新会话
 建立时产生一次。`enable_request_id=false` 完全回到旧行为 —— 它是排查用的回退开关。
 
+### D11：`@filter.on_llm_request()` 统一管理提示词注入与非管理员工具脱敏
+
+在 AstrBot 中，`@filter.on_llm_request()` 允许插件在 LLM 推理请求发起前对 `ProviderRequest`（含系统提示词与可用工具列表）进行实时调整。
+
+本插件将两个核心诉求统一收敛在同一个 `on_llm_request` 钩子中（AstrBot 插件类仅支持一个有效的 `on_llm_request` 方法）：
+
+1. **权限守卫的提示词注入**：
+   - 用户在配置项 `llm_prompt_injection` 中配置希望注入的自定义系统提示词；
+   - 权限拦截：仅当调用方通过权限鉴权（`self._denied(event) is None`）时才执行注入。对于被 `admin_only` 或白名单阻断的普通用户，绝不注入该提示词，防止泄露浏览器操作技巧并节省 prompt token；
+   - 空值跳过：配置为空或仅空白字符时不执行注入；
+   - 优雅拼接：原 `system_prompt` 非空时自动以 `\n\n` 衔接注入内容。
+
+2. **非管理员的高危工具动态脱敏**：
+   - 当调用方不是管理员（`not self._safe_is_admin(event)`）时，实时将管理员专属高危工具（`bsk_evaluate`、`bsk_debug`、`bsk_load_tools`、`bsk_assist`、`bsk_status`）从 `req.tools` 中剥离；
+   - 彻底避免普通用户提问时 LLM 看到不可用高危工具而产生幻觉调用或增加无谓的上下文负担。
+
 ---
 
 ## 6. 测试策略
@@ -779,7 +810,8 @@ AstrBot 解析数据路径时优先读该变量，否则普通模式下用当前
 - **必须提交的文件**：`LICENSE`、`README.md`、`CHANGELOG.md`、`.gitignore`
 - `.gitignore` 需排除：`__pycache__/`、`*.pyc`、测试产物、截图、`.venv/`
 
-**协议**：`MIT OR AGPL-3.0-or-later` 双许可（见调研报告 `07-agpl-redteam.md` 的结论）。文件布局：`LICENSE` **只放 MIT 全文**、`LICENSE-AGPL` 放 AGPL-3.0 全文、双许可声明与理由写在 README 第 12 节 —— 自定义声明混在 `LICENSE` 里会让 GitHub 的 licensee 匹配失败、侧栏显示 `Other`。
+**协议**：单一 `MIT` 许可。文件布局：`LICENSE` 仅保留标准纯 MIT 全文，仓库彻底移除 `LICENSE-AGPL`，README 第 12 节明确声明单一 MIT 开源许可。
+**作者**：保留原作者 `JosephTian876`，增加贡献者 `SmileYik`（`metadata.yaml` 格式为 `author: "JosephTian876, SmileYik"`）。
 **商标纪律**：插件名用 `astrbot_plugin_bsk_browser`，**不得**使用 "BrowserSkill" 作为产品名，README 必须含非官方声明。
 
 ---
@@ -788,11 +820,11 @@ AstrBot 解析数据路径时优先读该变量，否则普通模式下用当前
 
 - [ ] 不包含 `bsk` 二进制
 - [ ] 不复制 Tencent/BrowserSkill 的任何源码/schema/skill 文档
-- [ ] 不复制 AstrBot 源码（写了 AGPL 代码就必须 AGPL）
+- [ ] 不复制 AstrBot 源码
 - [ ] 未使用官方模板 "Use this template" 建仓
-- [ ] `LICENSE` 是纯 MIT 全文（不带自定义声明）、`LICENSE-AGPL` 是 AGPL-3.0 全文，双许可声明在 README §12
-- [ ] README 含：非官方声明、致谢 Tencent/BrowserSkill、隐私提醒、已知限制
-- [ ] 仓库公开（满足 AGPL §13）
+- [ ] `LICENSE` 是纯 MIT 全文（不带自定义声明，无 AGPL 文件，保持单一 MIT 授权）
+- [ ] README 含：单一 MIT 协议声明、作者署名（JosephTian876, SmileYik）、非官方声明、致谢 Tencent/BrowserSkill、隐私提醒、已知限制
+- [ ] 仓库公开
 
 ---
 
