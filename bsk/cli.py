@@ -114,6 +114,64 @@ class BskCli:
             params.append("--json")
         return await self._runner.run(params, timeout=timeout)
 
+    async def close_tab_safe(
+        self,
+        session: str,
+        tab_id: int | str,
+        *,
+        timeout: float = 5.0,
+    ) -> BskResult:
+        """安全关闭标签页的标准业务流程。
+
+        解决直接调用 tab close 遭遇 observation_required 或由于后台标签 DOM
+        更新导致 observation_changed 的问题。
+
+        执行标准流程：
+        1. select_tab: 先将目标标签页置于激活/聚焦状态，防止后台页面动态更新使观察凭据失效；
+        2. sync_tab: 获取该标签页最新的 observation_id 与 context_id 凭据；
+        3. close_tab: 携带凭据关闭该标签页。
+
+        对 select 和 sync 步骤中出现的非致命异常做防御性降级，确保最终必然尝试关闭。
+
+        Args:
+            session: 浏览器会话标识 (Session ID)。
+            tab_id: 待关闭的标签页 ID (必填)。
+            timeout: 每步命令的超时时间（秒，默认 5.0）。
+
+        Returns:
+            BskResult 最终 close_tab 的执行结果。
+        """
+        # 1. 尝试聚焦目标标签
+        try:
+            await self.select_tab(session, tab_id, timeout=timeout)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # 2. 尝试同步获取最新凭证
+        obs_id: str | None = None
+        ctx_id: str | None = None
+        try:
+            sync_res = await self.sync_tab(session, tab_id=tab_id, timeout=timeout)
+            raw = sync_res.data if isinstance(sync_res.data, dict) else {}
+            obs_val = raw.get("observation_id") or raw.get("obs")
+            ctx_val = raw.get("context_id") or raw.get("ctx")
+            if obs_val:
+                obs_id = str(obs_val)
+            if ctx_val:
+                ctx_id = str(ctx_val)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # 3. 携带凭证执行关闭
+        return await self.close_tab(
+            session,
+            tab_id,
+            observation=obs_id,
+            context=ctx_id,
+            timeout=timeout,
+        )
+
+
     async def list_tabs(
         self,
         session: str | None = None,

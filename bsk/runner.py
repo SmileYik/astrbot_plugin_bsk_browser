@@ -29,6 +29,7 @@ import time
 from typing import Any
 
 from . import errors
+from .cli import BskCli
 from .errors import BskError, BskNotInstalled
 from .logger import NULL_LOGGER, LoggerLike, truncate_log_text
 from .models import BskResult
@@ -264,6 +265,7 @@ class BskRunner:
         self._logger = logger or NULL_LOGGER
         self.max_log_len = 2048 if max_log_len is None else max(0, int(max_log_len))
         self._resolved: str | None = None
+        self.cli = BskCli(self)
 
     def resolve(self) -> str:
         """解析并缓存 bsk 路径。第一次调用可能抛 ``BskNotInstalled``。
