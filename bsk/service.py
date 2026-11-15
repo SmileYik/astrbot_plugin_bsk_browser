@@ -1275,7 +1275,9 @@ class BskService:
     async def close_session(self, key: str) -> bool:
         """关闭当前会话。返回是否真的关了一个。"""
         session_key = self._resolve_key(key)
+        await self.sweep_agent_tabs(session_key)
         self._session_observations.pop(session_key, None)
+        self._session_known_tabs.pop(session_key, None)
         return await self.sessions.release(key)
 
     async def release_session(self, key: str) -> bool:
@@ -1284,7 +1286,13 @@ class BskService:
 
     async def shutdown(self) -> int:
         """关闭全部会话。插件 ``terminate()`` 调用。"""
+        for key in list(self._owned().keys()):
+            try:
+                await self.sweep_agent_tabs(key)
+            except Exception:  # noqa: BLE001
+                pass
         self._session_observations.clear()
+        self._session_known_tabs.clear()
         return await self.sessions.release_all()
 
     async def recover_orphans(self) -> int:
@@ -1712,8 +1720,11 @@ class BskService:
         if not target:
             raise self._no_current_session_error("停止")
 
+        await self.sweep_agent_tabs(target)
+
         session_id = self._owned().get(target, "")
         self._session_observations.pop(self._resolve_key(target), None)
+        self._session_known_tabs.pop(self._resolve_key(target), None)
         stopped = await self.sessions.release(target)
 
         # 台账要跟着走：不管 stop 成不成功，本地都**不再**持有这个会话
@@ -2879,6 +2890,29 @@ class BskService:
             "total_tabs": len(current_tab_ids),
         }
 
+    async def sweep_agent_tabs(self, key: str) -> None:
+        """清理指定会话中多余/弹出的标签页，只保留主标签页，防止外链造成孤儿标签页残留或触发 dropOnly。"""
+        session_key = self._resolve_key(key)
+        try:
+            tabs_data = await self.tabs(session_key, "list", scope="agent")
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("获取 Agent 标签页列表以清理失败：%r", exc)
+            return
+
+        tab_list = tabs_data.get("tabs", [])
+        if not isinstance(tab_list, list) or len(tab_list) <= 1:
+            return
+
+        # 保留第一个标签页，将其余标签页依次关闭
+        for tab in tab_list[1:]:
+            if isinstance(tab, dict):
+                tid = tab.get("tab_id", tab.get("id"))
+                if tid is not None:
+                    try:
+                        await self.tabs(session_key, "close", tab_id=int(tid))
+                    except Exception as exc:  # noqa: BLE001
+                        self._logger.debug("清理多余标签页 %s 失败（忽略）：%r", tid, exc)
+
     @staticmethod
     def _payload_tab_id(data: Any) -> int | None:
         """从载荷里取 ``tab_id``；没有就给 ``None``（不编造 0）。"""
@@ -3132,6 +3166,31 @@ class BskService:
                 for name, value in data.items():
                     if isinstance(value, (str, int, float, bool)) or value is None:
                         out.setdefault(name, value)
+            if action == "close":
+                if target_tab_id is not None:
+                    try:
+                        tid = int(target_tab_id)
+                        known = self._session_known_tabs.get(session_key)
+                        if known:
+                            known.discard(tid)
+                    except (ValueError, TypeError):
+                        pass
+                self._session_observations.pop(session_key, None)
+                try:
+                    rem_data = await self.tabs(session_key, "list", scope="agent")
+                    rem_tabs = rem_data.get("tabs", [])
+                    if rem_tabs:
+                        last_tab = rem_tabs[-1]
+                        last_id = last_tab.get("tab_id", last_tab.get("id"))
+                        if last_id is not None:
+                            await self.tabs(session_key, "select", tab_id=int(last_id))
+                            out["switched_to_tab"] = {
+                                "tab_id": int(last_id),
+                                "title": str(last_tab.get("title") or ""),
+                                "url": str(last_tab.get("url") or ""),
+                            }
+                except Exception as exc:  # noqa: BLE001
+                    self._logger.debug("关闭标签后切回上一标签失败（忽略）：%r", exc)
         return out
 
     @staticmethod

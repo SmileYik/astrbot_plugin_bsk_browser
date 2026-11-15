@@ -1658,6 +1658,29 @@ class SessionManager:
         """
         if not entry.session.session_id:
             return True  # 只有占位槽位，没有真实会话可停。
+
+        # 在停止会话前，清理 Agent Window 中多余的弹窗/外链标签页，避免触发 dropOnly 导致窗口留在宿主机
+        try:
+            res = await self._runner.run(
+                ["tab", "list", "--scope", "agent", "--session", entry.session.session_id, "--json"],
+                timeout=5.0,
+            )
+            tab_list = res.data if isinstance(res.data, list) else []
+            if len(tab_list) > 1:
+                for t in tab_list[1:]:
+                    if isinstance(t, dict):
+                        tid = t.get("tab_id", t.get("id"))
+                        if tid is not None:
+                            try:
+                                await self._runner.run(
+                                    ["tab", "close", str(tid), "--session", entry.session.session_id, "--json"],
+                                    timeout=5.0,
+                                )
+                            except Exception:
+                                pass
+        except Exception:
+            pass
+
         return await self._stop_session_id(entry.session.session_id)
 
     async def _stop_session_id(self, session_id: str) -> bool:

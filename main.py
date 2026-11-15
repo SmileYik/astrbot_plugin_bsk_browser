@@ -1831,10 +1831,15 @@ class BskBrowserPlugin(Star):
         lines = [f"已执行 tab {action}。"]
         if result.get("tab_id") is not None:
             lines.append(f"标签页 id：{result['tab_id']}")
+        if action == "close" and result.get("switched_to_tab"):
+            sw = result["switched_to_tab"]
+            lines.append(
+                f"【焦点已切回】已自动切回标签页 id={sw.get('tab_id')}（{sw.get('title') or '无标题'}）。"
+            )
         extra = {
             name: value
             for name, value in result.items()
-            if name not in ("session", "action", "tab_id", "tabs")
+            if name not in ("session", "action", "tab_id", "tabs", "switched_to_tab")
             and value not in (None, "", [], {})
         }
         if extra:
