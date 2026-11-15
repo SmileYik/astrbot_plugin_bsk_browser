@@ -51,6 +51,7 @@ __all__ = [
     "SAFE_SESSION_ID_FALLBACK",
     "SNIFF_BYTES",
     "cleanup_shots",
+    "compress_and_optimize_image",
     "encode_for_llm",
     "make_shot_path",
     "sanitize_session_id",
@@ -466,3 +467,88 @@ def encode_for_llm(path: str | Path, *, max_width: int = 1280) -> str | None:
         return None
 
     return f"data:{MIME_TYPES['jpeg']};base64,{encoded}"
+
+
+def compress_and_optimize_image(
+    path: str | Path,
+    *,
+    max_size_bytes: int = 1_500_000,
+    max_width: int = 1920,
+    quality: int = 85,
+) -> Path:
+    """对截图（普通视口或长截图）进行安全压缩与优化，生成适合网络传输的 JPEG 图像。
+
+    防止因无损原始 PNG 过大（长截图可达 10~30MB）导致 OneBot / WebSocket
+    单帧传输超限崩溃（表现为 QQ 收到 [图片] 占位符却无法加载内容）。
+
+    Args:
+        path: 原始截图文件路径。
+        max_size_bytes: 目标最大字节数（默认 1.5MB，严格避开 4MB WebSocket 限制）。
+        max_width: 最大宽度像素（默认 1920，长截图超宽时等比缩放）。
+        quality: 初始 JPEG 压缩质量（默认 85）。
+
+    Returns:
+        优化后的图片路径（.jpg）。若 Pillow 不可用或读取失败，安全返回原始路径。
+    """
+    orig_path = Path(path)
+    if not orig_path.is_file():
+        return orig_path
+
+    try:
+        from PIL import Image
+    except ImportError:
+        return orig_path
+
+    out_path = orig_path.with_name(f"{orig_path.stem}_opt.jpg")
+
+    try:
+        with Image.open(orig_path) as image:
+            image.load()
+            width, height = image.size
+            if width <= 0 or height <= 0:
+                return orig_path
+
+            # 透明度处理：RGBA / P 等模式转为白色底底色
+            if image.mode in ("RGBA", "LA") or (
+                image.mode == "P" and "transparency" in image.info
+            ):
+                rgba = image.convert("RGBA")
+                background = Image.new("RGB", rgba.size, (255, 255, 255))
+                background.paste(rgba, mask=rgba.split()[3])
+                rgb_image = background
+            else:
+                rgb_image = image.convert("RGB")
+
+            # 宽度缩放：超宽时按等比缩放
+            if rgb_image.width > max_width:
+                ratio = max_width / float(rgb_image.width)
+                new_size = (max_width, max(1, round(rgb_image.height * ratio)))
+                resampling = getattr(
+                    getattr(Image, "Resampling", Image), "LANCZOS", None
+                )
+                if resampling is not None:
+                    rgb_image = rgb_image.resize(new_size, resampling)
+                else:
+                    rgb_image = rgb_image.resize(new_size)
+
+            # 阶梯式质量控制：从 quality 开始递减，确保文件大小压进 max_size_bytes 安全区间
+            qualities = [quality]
+            for q in (75, 65, 50):
+                if q < quality:
+                    qualities.append(q)
+
+            for q in qualities:
+                rgb_image.save(out_path, format="JPEG", quality=q, optimize=True)
+                if out_path.stat().st_size <= max_size_bytes:
+                    break
+
+        return out_path
+    except Exception:
+        # 遇到任何图片损坏或未知错误，安全回退至原图
+        if out_path.is_file():
+            try:
+                out_path.unlink()
+            except OSError:
+                pass
+        return orig_path
+

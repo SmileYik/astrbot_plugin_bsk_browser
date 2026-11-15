@@ -50,6 +50,7 @@ from .runner import BskRunner
 from .session import SessionManager
 from .shots import (
     cleanup_shots,
+    compress_and_optimize_image,
     make_shot_path,
     verify_shot,
 )
@@ -3354,6 +3355,20 @@ class BskService:
 
         ok, reason = verify_shot(shot)
         warning = "" if ok else f"截图可能不完整：{reason}"
+
+        # 压缩优化流水线（将超大 PNG / 长截图转为安全体积的 JPEG，杜绝网络传输截断）
+        if ok and shot.path:
+            opt_path = compress_and_optimize_image(shot.path)
+            if opt_path != Path(shot.path) and opt_path.is_file():
+                shot.path = str(opt_path)
+                shot.byte_size = opt_path.stat().st_size
+                try:
+                    from PIL import Image
+
+                    with Image.open(opt_path) as im:
+                        shot.width, shot.height = im.size
+                except Exception:
+                    pass
 
         # 顺手清理旧图，避免磁盘无限增长（失败不影响主流程）。
         try:
