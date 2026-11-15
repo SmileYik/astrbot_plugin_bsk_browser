@@ -588,18 +588,17 @@ async def group_real_browser() -> None:
             f"引用={refs[:8]}" if refs else f"没找到 @eN；返回：{text[:200]!r}",
         )
 
-    # 3.4 截图（async generator：先图后文）
+    # 3.4 截图（async generator：直接 yield 图片结果）
     items, gen_exc = await consume(inst.bsk_inspect(admin, action="screenshot"))
     if gen_exc is not None:
         record("3.4 bsk_inspect screenshot 正常产出一张图片", False, f"生成器抛异常：{gen_exc!r}")
     else:
         record(
-            "3.4 bsk_inspect screenshot 至少 yield 两项",
-            len(items) >= 2,
+            "3.4 bsk_inspect screenshot 产出图片项",
+            len(items) >= 1,
             f"共 {len(items)} 项：{[type(i).__name__ for i in items]}",
         )
         image_items = [i for i in items if hasattr(i, "path")]
-        text_items = [i for i in items if isinstance(i, str)]
         if not image_items:
             record("3.5 bsk_inspect screenshot 产出图片结果", False, f"没有带 .path 的项：{items!r}")
         else:
@@ -608,21 +607,6 @@ async def group_real_browser() -> None:
                 "3.5 bsk_inspect screenshot 产出的图片真实存在且是 PNG 魔数",
                 ok_png,
                 f"{image_items[0].path}；{detail}",
-            )
-        record(
-            "3.6 bsk_inspect screenshot 同时 yield 描述文本",
-            bool(text_items) and "截图" in text_items[-1],
-            f"{text_items[-1][:120]!r}" if text_items else "没有文本项",
-        )
-        # 顺序保证：图片先 yield（会被框架 set_result 发给用户），文本后 yield（回灌模型）
-        if image_items and text_items:
-            img_idx = min(items.index(i) for i in image_items)
-            txt_idx = max(items.index(i) for i in text_items)
-            record(
-                "3.7 图片先于文本 yield（符合框架消费顺序）",
-                img_idx < txt_idx,
-                f"图片下标={img_idx}，文本下标={txt_idx}，"
-                f"顺序={[type(i).__name__ for i in items]}",
             )
 
     # 3.8 只读动作：scroll_to @e1

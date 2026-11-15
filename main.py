@@ -1975,6 +1975,7 @@ class BskBrowserPlugin(Star):
 
             try:
                 yield event.image_result(payload.path)
+                return
             except Exception as exc:  # noqa: BLE001
                 astrbot_logger.warning("[bsk_browser] 发送截图失败：%r", exc)
                 message = f"{message}\n（图片发送失败了，截图文件在：{payload.path}）"

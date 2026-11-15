@@ -92,9 +92,8 @@ class TestToolLogging(unittest.IsolatedAsyncioTestCase):
             gen = self.plugin.bsk_inspect(self.event, action="screenshot")
             items = [item async for item in gen]
 
-        self.assertEqual(len(items), 2)
+        self.assertEqual(len(items), 1)
         self.assertEqual(items[0], "[IMAGE:/tmp/shot.png]")
-        self.assertIn("LLM screenshot result", items[1])
 
         debug_logs = [r for r in self.logger.records if r.level == "debug"]
         self.assertGreaterEqual(len(debug_logs), 2)

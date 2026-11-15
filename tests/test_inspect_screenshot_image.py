@@ -27,7 +27,7 @@ class TestInspectScreenshotImage(unittest.IsolatedAsyncioTestCase):
         self.event = FakeEvent(is_admin=True, umo="test:user:1")
         self.event.image_result = MagicMock(side_effect=lambda path: f"[IMAGE:{path}]")
 
-    async def test_inspect_screenshot_yields_image_and_text(self) -> None:
+    async def test_inspect_screenshot_yields_image(self) -> None:
         payload = ShotPayload(
             path="/tmp/test_shot.png",
             for_llm="当前页面视口截图完成，尺寸 1280x800",
@@ -39,9 +39,8 @@ class TestInspectScreenshotImage(unittest.IsolatedAsyncioTestCase):
         gen = self.plugin.bsk_inspect(self.event, action="screenshot", full_page=True)
         items = [item async for item in gen]
 
-        self.assertEqual(len(items), 2)
+        self.assertEqual(len(items), 1)
         self.assertEqual(items[0], "[IMAGE:/tmp/test_shot.png]")
-        self.assertIn("当前页面视口截图完成", items[1])
         self.plugin.service.screenshot_ex.assert_called_once()
         call_kwargs = self.plugin.service.screenshot_ex.call_args[1]
         self.assertTrue(call_kwargs.get("full_page"))
@@ -58,7 +57,7 @@ class TestInspectScreenshotImage(unittest.IsolatedAsyncioTestCase):
         gen = self.plugin.bsk_inspect(self.event, action="screenshot")
         items = [item async for item in gen]
 
-        self.assertEqual(len(items), 2)
+        self.assertEqual(len(items), 1)
         self.assertEqual(items[0], "[IMAGE:/tmp/test_shot.png]")
         call_kwargs = self.plugin.service.screenshot_ex.call_args[1]
         self.assertFalse(call_kwargs.get("full_page"))
