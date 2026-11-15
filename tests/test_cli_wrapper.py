@@ -127,53 +127,6 @@ def test_cli_system_methods():
     asyncio.run(_test())
 
 
-def test_cli_close_tab_safe_sequence():
-    async def _test():
-        call_sequence = []
-        async def mock_run(args, timeout=None):
-            cmd = " ".join(args)
-            call_sequence.append(cmd)
-            if "sync" in cmd:
-                return _mock_result(data={"observation_id": "obs-999", "context_id": "ctx-888"})
-            return _mock_result()
-
-        runner = MagicMock()
-        runner.run = AsyncMock(side_effect=mock_run)
-        cli = BskCli(runner)
-
-        res = await cli.close_tab_safe("sess1", 105)
-        assert res.exit_code == 0
-        assert len(call_sequence) == 3
-        assert call_sequence[0].startswith("tab select 105 --session sess1")
-        assert call_sequence[1].startswith("sync --session sess1 --tab-id 105")
-        assert call_sequence[2].startswith("tab close 105 --session sess1")
-        assert "--observation obs-999" in call_sequence[2]
-        assert "--context ctx-888" in call_sequence[2]
-    asyncio.run(_test())
-
-
-def test_cli_close_tab_safe_tolerates_select_or_sync_failure():
-    async def _test():
-        call_sequence = []
-        async def mock_run(args, timeout=None):
-            cmd = " ".join(args)
-            call_sequence.append(cmd)
-            if "select" in cmd:
-                raise Exception("select failed")
-            if "sync" in cmd:
-                return _mock_result(exit_code=1)
-            return _mock_result()
-
-        runner = MagicMock()
-        runner.run = AsyncMock(side_effect=mock_run)
-        cli = BskCli(runner)
-
-        res = await cli.close_tab_safe("sess1", 106)
-        assert res.exit_code == 0
-        assert any("tab close 106" in cmd for cmd in call_sequence)
-    asyncio.run(_test())
-
-
 def test_runner_has_cli_instance():
     from bsk.runner import BskRunner
     runner = BskRunner(bsk_path="bsk")

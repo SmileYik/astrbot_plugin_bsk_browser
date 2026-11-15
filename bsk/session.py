@@ -557,6 +557,7 @@ class SessionManager:
         runner: BskRunner,
         settings: "Settings | Any",
         *,
+        cli: Any = None,
         browser_probe: BrowserProbe | None = None,
         journal: SessionJournal | None = None,
         stop_max_attempts: int = STOP_MAX_ATTEMPTS,
@@ -571,11 +572,14 @@ class SessionManager:
         self._runner = runner
         from .cli import BskCli
 
-        cli = getattr(runner, "cli", None)
-        if not isinstance(cli, BskCli):
-            self._cli = BskCli(runner)
-        else:
+        if cli is not None:
             self._cli = cli
+        else:
+            runner_cli = getattr(runner, "cli", None)
+            if not isinstance(runner_cli, BskCli):
+                self._cli = BskCli(runner)
+            else:
+                self._cli = runner_cli
         self._browser_probe = browser_probe
         self._journal = journal
         self._logger = logger or NULL_LOGGER
@@ -754,6 +758,79 @@ class SessionManager:
             )
             return entry.session
 
+    async def execute_action(
+        self,
+        key: str,
+        action: Any,
+        *,
+        timeout: float | None = None,
+        allow_uncertain: bool = False,
+    ) -> BskResult:
+        """核心方法：带上会话 id 调度执行一个异步 CLI 动作 (BskCli 方法调用)。
+
+        自动处理：per-key 加锁（同 key 串行）、会话失效时重建并带新 session_id 重试、
+        ``session_busy`` 短暂重试、``outcome_unknown`` 标记不确定态。任何情况下都只重试一次。
+
+        Args:
+            key: 业务键（umo 等）。
+            action: 接收 session_id 并返回 Awaitable[BskResult] 的可调用对象。
+            timeout: 超时秒数；None 时用 ``settings.command_timeout_sec``。
+            allow_uncertain: 显式声明"这是只读动作"，允许在会话处于不确定态时执行。
+
+        Returns:
+            成功的 BskResult。
+        """
+        self._ensure_open()
+
+        async with self._locked_entry(key) as entry:
+            await self._ensure_session(entry)
+            self._touch(entry)
+
+            if entry.session.uncertain and not allow_uncertain:
+                self._counters["uncertain_blocks"] += 1
+                raise self._uncertain_error(entry.session)
+
+            for attempt in range(1, MAX_ATTEMPTS + 1):
+                try:
+                    res = action(entry.session.session_id)
+                    if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
+                        result = await res
+                    else:
+                        result = res
+                except BskOutcomeUnknown as exc:
+                    self._mark_uncertain(entry, f"命令结果未知：{exc.message}")
+                    raise
+                except BskError as exc:
+                    if exc.reason in OUTCOME_UNKNOWN_REASONS:
+                        self._mark_uncertain(entry, f"命令结果未知：{exc.message}")
+                        raise
+
+                    if isinstance(exc, BskSessionGone):
+                        if attempt >= MAX_ATTEMPTS or entry.closed:
+                            raise
+                        self._counters["not_found_rebuilds"] += 1
+                        await self._restart(entry, stop_old=False)
+                        self._logger.info(
+                            "会话 %s 已失效，已重建为 %s，重试一次",
+                            key,
+                            entry.session.session_id,
+                        )
+                        continue
+
+                    if isinstance(exc, BskSessionBusy):
+                        if attempt >= MAX_ATTEMPTS:
+                            raise
+                        self._counters["busy_retries"] += 1
+                        await asyncio.sleep(BUSY_RETRY_DELAY_SEC)
+                        continue
+
+                    raise
+
+                self._touch(entry)
+                return result
+
+            raise AssertionError("unreachable")
+
     async def execute(
         self,
         key: str,
@@ -762,7 +839,7 @@ class SessionManager:
         timeout: float | None = None,
         allow_uncertain: bool = False,
     ) -> BskResult:
-        """核心方法：带上会话 id 执行一条 bsk 命令。
+        """核心方法：带上会话 id 执行一条 bsk 命令（兼容层，内部转调 execute_action）。
 
         自动处理：per-key 加锁（同 key 串行）、会话失效时重建、``session_busy``
         短暂重试、``outcome_unknown`` 标记不确定态。任何情况下都只重试一次。
@@ -788,70 +865,66 @@ class SessionManager:
             BskSessionBusy: 会话一直忙（重试已用尽）。
             BskError: 其他 bsk 错误，``friendly`` 可直接给用户/模型看。
         """
-        self._ensure_open()
         effective_timeout = (
             float(timeout) if timeout is not None else self._command_timeout
         )
 
-        async with self._locked_entry(key) as entry:
-            await self._ensure_session(entry)
-            self._touch(entry)
+        async def _run_args(sid: str) -> BskResult:
+            args = await self._build_args(args_builder, sid)
+            return await self._runner.run_or_raise(args, timeout=effective_timeout)
 
-            if entry.session.uncertain and not allow_uncertain:
-                self._counters["uncertain_blocks"] += 1
-                raise self._uncertain_error(entry.session)
+        return await self.execute_action(
+            key,
+            _run_args,
+            timeout=effective_timeout,
+            allow_uncertain=allow_uncertain,
+        )
 
-            # 重试次数硬上限 = MAX_ATTEMPTS(2)，即"首次 + 重试一次"。
-            #   循环体里的每个分支要么 return、要么 continue（消耗掉下一次机会）、
-            #   要么 raise，所以不存在无限重试的可能。
-            for attempt in range(1, MAX_ATTEMPTS + 1):
-                args = await self._build_args(args_builder, entry.session.session_id)
-                try:
-                    result = await self._runner.run_or_raise(
-                        args, timeout=effective_timeout
-                    )
-                except BskOutcomeUnknown as exc:
-                    # 动作可能已经生效，绝不重试；标记后让异常冒出去。
-                    self._mark_uncertain(entry, f"命令结果未知：{exc.message}")
-                    raise
-                except BskError as exc:
-                    # classify() 已把 data.reason 归到 BskOutcomeUnknown，
-                    # 这里再兜一层：任何带 outcome_unknown reason 的错误都按
-                    # 不可重试处理，防止上游改了分类逻辑就悄悄退化成重试。
-                    if exc.reason in OUTCOME_UNKNOWN_REASONS:
-                        self._mark_uncertain(entry, f"命令结果未知：{exc.message}")
-                        raise
+    async def close_tab_safe(
+        self,
+        key_or_session_id: str,
+        tab_id: int | str,
+        *,
+        timeout: float = 5.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """安全关闭标签页的标准业务流程（聚焦 -> 同步凭证 -> 携带凭证关闭）。"""
+        session_id = str(key_or_session_id)
+        if key_or_session_id in self._entries:
+            entry = self._entries[key_or_session_id]
+            if entry.session and entry.session.session_id:
+                session_id = entry.session.session_id
 
-                    if isinstance(exc, BskSessionGone):
-                        if attempt >= MAX_ATTEMPTS or entry.closed:
-                            # entry.closed：槽位已被 release/reap 摘走，
-                            # 此时重建会造出无人管理的僵尸会话，必须放弃。
-                            raise
-                        # 用失败触发重建：不先 stop 旧会话（bsk 已确认它不存在），
-                        #   再由下一轮用新的 session_id 重新构造参数。
-                        self._counters["not_found_rebuilds"] += 1
-                        await self._restart(entry, stop_old=False)
-                        self._logger.info(
-                            "会话 %s 已失效，已重建为 %s，重试一次",
-                            key,
-                            entry.session.session_id,
-                        )
-                        continue
+        # 1. 尝试聚焦目标标签
+        try:
+            await self._cli.select_tab(session_id, tab_id, timeout=timeout)
+        except Exception:
+            pass
 
-                    if isinstance(exc, BskSessionBusy):
-                        if attempt >= MAX_ATTEMPTS:
-                            raise
-                        self._counters["busy_retries"] += 1
-                        await asyncio.sleep(BUSY_RETRY_DELAY_SEC)
-                        continue
+        # 2. 尝试同步获取最新凭据
+        obs_id: str | None = None
+        ctx_id: str | None = None
+        try:
+            sync_res = await self._cli.sync_tab(session_id, tab_id=tab_id, timeout=timeout)
+            raw = sync_res.data if isinstance(sync_res.data, dict) else {}
+            obs_val = raw.get("observation_id") or raw.get("obs")
+            ctx_val = raw.get("context_id") or raw.get("ctx")
+            if obs_val:
+                obs_id = str(obs_val)
+            if ctx_val:
+                ctx_id = str(ctx_val)
+        except Exception:
+            pass
 
-                    raise
-
-                self._touch(entry)
-                return result
-
-            # 循环必然以 return 或 raise 结束，正常走不到这里。
-            raise AssertionError("unreachable")  # pragma: no cover
+        # 3. 携带凭据执行关闭
+        return await self._cli.close_tab(
+            session_id,
+            tab_id,
+            observation=obs_id,
+            context=ctx_id,
+            timeout=timeout,
+            raise_on_error=raise_on_error,
+        )
 
     async def release(self, key: str) -> bool:
         """显式关闭并移除某个 key 的会话。
@@ -1734,8 +1807,8 @@ class SessionManager:
                         tid = t.get("tab_id", t.get("id"))
                         if tid is not None:
                             try:
-                                await self._cli.close_tab_safe(
-                                    entry.session.session_id, tid, timeout=5.0
+                                await self.close_tab_safe(
+                                    entry.session.session_id, tid, timeout=5.0, raise_on_error=False
                                 )
                             except Exception as exc:  # noqa: BLE001
                                 self._logger.debug("安全关闭标签页 %s 失败（忽略）：%r", tid, exc)
