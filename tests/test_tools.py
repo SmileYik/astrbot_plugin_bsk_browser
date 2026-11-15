@@ -871,6 +871,37 @@ class TestCompletionCriteria(unittest.TestCase):
         self.assertIn("stableForMs", msg)
 
 
+class TestInspectScreenshotValidation(unittest.TestCase):
+    """``bsk_inspect(action="screenshot")`` 的参数校验与 schema 测试。"""
+
+    def test_schema_contains_full_page(self) -> None:
+        props = tools.TOOL_SCHEMAS["bsk_inspect"]["properties"]
+        self.assertIn("full_page", props)
+        self.assertEqual(props["full_page"]["type"], "boolean")
+
+    def test_screenshot_full_page_default_false(self) -> None:
+        got = call("bsk_inspect", {"action": "screenshot"})
+        self.assertFalse(got.get("full_page"))
+
+    def test_screenshot_full_page_true(self) -> None:
+        got = call("bsk_inspect", {"action": "screenshot", "full_page": True})
+        self.assertTrue(got.get("full_page"))
+
+    def test_screenshot_full_page_camel_case(self) -> None:
+        got = call("bsk_inspect", {"action": "screenshot", "fullPage": True})
+        self.assertTrue(got.get("full_page"))
+
+    def test_screenshot_full_page_non_boolean_rejected(self) -> None:
+        with self.assertRaises(tools.BskToolError):
+            call("bsk_inspect", {"action": "screenshot", "full_page": "true"})
+
+    def test_full_page_rejected_for_other_inspect_actions(self) -> None:
+        for action in ("observe", "snapshot", "html", "console", "network"):
+            with self.subTest(action=action):
+                with self.assertRaises(tools.BskToolError):
+                    call("bsk_inspect", {"action": action, "full_page": True})
+
+
 class TestTabIdPreserved(unittest.TestCase):
     """``tab_id`` 必须保留在 validate 的输出里。
 

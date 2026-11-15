@@ -612,6 +612,10 @@ TOOL_SCHEMAS: dict[str, dict] = {
             "max_text_chars": _p("number", "console/network：每条文本最多多少字符，必须大于 0。"),
             "include_stack": _p("boolean", "console：是否附带结构化调用栈。"),
             "ref": _p("string", _HTML_REF_PROP["description"] + " screenshot 也用它裁剪截图。"),
+            "full_page": _p(
+                "boolean",
+                "screenshot 专用：设为 true 截取整个长页面，默认只截当前视口。",
+            ),
             "query": _p(
                 "string",
                 "observe：关键词模糊搜索。直接在页面全部元素（名称/角色/链接）与文本中检索，"
@@ -688,7 +692,10 @@ TOOL_SCHEMAS: dict[str, dict] = {
             ),
             "settle_ms": _p("number", "hover：等待悬浮触发的内容稳定下来的毫秒数，必须大于 0，默认 200。"),
             "delta_x": _p("number", "wheel：水平滚动量，单位 CSS 像素，正数向右。"),
-            "delta_y": _p("number", "wheel：垂直滚动量，单位 CSS 像素，正数向下。"),
+            "delta_y": _p(
+                "number",
+                "wheel：垂直滚动量，单位 CSS 像素。特别注意方向：想要页面【向下滚动】请务必传【正数】（如 delta_y=500）；想要页面【向上滚动】请务必传【负数】（如 delta_y=-500）。",
+            ),
             "timeout_ms": _TIMEOUT_MS_PROP,
             "values": _p(
                 "array",
@@ -805,8 +812,9 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "与当前标签页交互。action 取 click / hover / wheel / scroll-to / focus / blur / fill / "
         "select / press。target 是快照引用（如 @e3）或 CSS 选择器；click/hover/scroll-to/"
         "focus/blur/fill/select 必填 target，fill 还要 value，select 还要 values，"
-        "press 必填 key 并可先用 target 聚焦。wheel 要求 delta_x 或 delta_y 至少一个非零。"
-        "操作后要 observe 一次确认结果。"
+        "press 必填 key 并可先用 target 聚焦。滚动提示：滚动到特定元素请优先用 scroll-to（配合 target）；"
+        "盲滚时用 wheel（向下滚动务必传正数 delta_y 如 500，建议配合 target 指定可滚动区域）。"
+        "wheel 要求 delta_x 或 delta_y 至少一个非零。操作后要 observe 一次确认结果。"
     ),
     "bsk_tabs": (
         "管理当前会话可见的标签页。action 取 list / create / select / close / borrow / return。"
@@ -1328,6 +1336,8 @@ def _validate_inspect(ctx: _Ctx) -> dict:
         )
 
     if action in ("observe", "snapshot"):
+        if ctx.given("full_page"):
+            ctx.fail(f"{ctx.where()} 不接受 full_page：它只对 screenshot 有意义。")
         if ctx.given("ref"):
             ctx.fail(
                 f"{ctx.where()} 不接受 ref：树状快照不需要限定范围，"
@@ -1378,10 +1388,10 @@ def _validate_inspect(ctx: _Ctx) -> dict:
         return out
 
     if action == "html":
-        for key in ("cursor", "max_depth", "max_tokens", "query", "offset", "view"):
+        for key in ("cursor", "max_depth", "max_tokens", "query", "offset", "view", "full_page"):
             if ctx.given(key):
                 ctx.fail(
-                    f"{ctx.where()} 不接受 {key}：它只对 observe/snapshot 有意义。"
+                    f"{ctx.where()} 不接受 {key}：它只对 observe/snapshot/screenshot 有意义。"
                 )
         ref = ctx.as_str("ref")
         _reject_blank(ctx, "ref", "要么给 @e3 这样的快照引用，要么省略它。")
@@ -1405,8 +1415,9 @@ def _validate_inspect(ctx: _Ctx) -> dict:
                 ctx.fail(f"{ctx.where()} 不接受 {key}：它不属于 screenshot。")
         ref = ctx.as_str("ref").strip()
         _reject_blank(ctx, "ref", "要么给 @e3 这样的快照引用，要么整个省略它（截整页）。")
+        full_page = ctx.as_bool("full_page")
         ctx.check_known()
-        return {"ref": ref, "tab_id": tab_id}
+        return {"ref": ref, "tab_id": tab_id, "full_page": full_page}
 
     if action == "console":
         # console 只吃 since/limit/max_text_chars/include_stack。下面这些键已经
@@ -1416,7 +1427,7 @@ def _validate_inspect(ctx: _Ctx) -> dict:
                     "pointer", "run_id", "id", "rule", "replay", "slow_ms", "window_ms",
                     "part", "state", "kind", "fields", "wait_ms", "command_id", "output",
                     "name", "method", "resource_type", "status", "url",
-                    "include_controlled", "query", "view"):
+                    "include_controlled", "query", "view", "full_page"):
             if ctx.given(key):
                 ctx.fail(
                     f"{ctx.where()} 不接受 {key}：它属于 bsk_debug 或 observe/snapshot，"
@@ -1438,7 +1449,7 @@ def _validate_inspect(ctx: _Ctx) -> dict:
                     "pointer", "run_id", "id", "rule", "replay", "slow_ms", "window_ms",
                     "part", "state", "kind", "fields", "wait_ms", "command_id", "output",
                     "name", "method", "resource_type", "status", "url",
-                    "include_controlled", "include_stack", "query", "view"):
+                    "include_controlled", "include_stack", "query", "view", "full_page"):
             if ctx.given(key):
                 ctx.fail(
                     f"{ctx.where()} 不接受 {key}：它属于 bsk_debug 或 console，"
