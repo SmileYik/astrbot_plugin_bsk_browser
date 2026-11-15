@@ -2951,6 +2951,12 @@ class BskService:
             len(current_tab_ids),
         )
 
+        # 针对新打开的标签页执行 sync 协调状态并拉齐 epoch
+        try:
+            await self.sync(session_key, tab_id=new_tab_id)
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("切换前同步新标签页 %s 状态失败（忽略）：%r", new_tab_id, exc)
+
         # 自动切换焦点至新标签页
         try:
             await self.tabs(session_key, "select", tab_id=new_tab_id)

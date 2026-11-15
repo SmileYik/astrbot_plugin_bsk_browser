@@ -169,4 +169,34 @@ def test_session_manager_reap_idle_cleans_extra_tabs():
     asyncio.run(_test())
 
 
+def test_detect_new_tabs_syncs_before_select():
+    async def _test():
+        service = BskService(settings=MagicMock())
+        service.sessions = MagicMock()
+        service._resolve_key = MagicMock(return_value="test_sess")
+        service._session_known_tabs["test_sess"] = {101}
+
+        # 模拟检测到新增了 102
+        tabs_data = {
+            "tabs": [
+                {"tab_id": 101, "title": "Baidu", "url": "https://www.baidu.com"},
+                {"tab_id": 102, "title": "Tieba", "url": "https://tieba.baidu.com"},
+            ]
+        }
+        service.tabs = AsyncMock(return_value=tabs_data)
+        service.sync = AsyncMock()
+
+        out = await service.detect_new_tabs_and_switch("test_sess")
+        assert out is not None
+        assert out["new_tab_id"] == 102
+
+        # 验证调用了 sync 同步新标签
+        service.sync.assert_called_once_with("test_sess", tab_id=102)
+        # 验证调用了 tabs(action="select")
+        service.tabs.assert_any_call("test_sess", "select", tab_id=102)
+
+    asyncio.run(_test())
+
+
+
 
