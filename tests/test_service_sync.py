@@ -81,6 +81,7 @@ class TestServiceSync(unittest.IsolatedAsyncioTestCase):
         success_res = MagicMock(data={"status": "ok"})
         service.sessions = MagicMock()
         service.sessions.execute = AsyncMock(side_effect=[err, success_res])
+        service.sessions.execute_action = service.sessions.execute
 
         res = await service.interact("s1", "click", target="button.submit")
         self.assertTrue(res["auto_synced"])
@@ -101,6 +102,7 @@ class TestServiceSync(unittest.IsolatedAsyncioTestCase):
         err = BskError("sync required", reason="cooperation_sync_required")
         service.sessions = MagicMock()
         service.sessions.execute = AsyncMock(side_effect=err)
+        service.sessions.execute_action = service.sessions.execute
 
         with self.assertRaises(BskUserError) as cm:
             await service.interact("s1", "fill", target="@e15", value="gtnh")
@@ -128,6 +130,7 @@ class TestServiceSync(unittest.IsolatedAsyncioTestCase):
         err = BskError("unknown", reason="cooperation_sync_required", effect_state="unknown")
         service.sessions = MagicMock()
         service.sessions.execute = AsyncMock(side_effect=err)
+        service.sessions.execute_action = service.sessions.execute
 
         with self.assertRaises(BskError):
             await service.interact("s1", "fill", target="@e1", value="gtnh")
@@ -153,6 +156,7 @@ class TestServiceSync(unittest.IsolatedAsyncioTestCase):
         err2 = BskError("sync required 2", reason="cooperation_sync_required")
         service.sessions = MagicMock()
         service.sessions.execute = AsyncMock(side_effect=[err1, err2])
+        service.sessions.execute_action = service.sessions.execute
 
         with self.assertRaises(BskError) as cm:
             await service.interact("s1", "fill", target="input.kw", value="gtnh")
@@ -184,6 +188,7 @@ class TestServiceSync(unittest.IsolatedAsyncioTestCase):
 
         service.sessions = MagicMock()
         service.sessions.execute = AsyncMock(side_effect=[err_sync, err_vis, scroll_res, click_res])
+        service.sessions.execute_action = service.sessions.execute
 
         res = await service.interact("s1", "click", target="button.submit")
         self.assertTrue(res["auto_synced"])

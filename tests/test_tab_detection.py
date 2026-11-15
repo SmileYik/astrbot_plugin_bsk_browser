@@ -67,24 +67,46 @@ def test_render_tabs_supports_dict_format():
 
 def test_detect_new_tabs_and_switch_integration_with_dict_payload():
     async def _test():
-        service = BskService(settings=MagicMock())
+        import inspect
+        from bsk.models import BskResult
+        service = BskService(settings=MagicMock(), runner=MagicMock())
         service._resolve_key = MagicMock(return_value="sess_1")
         service._session_known_tabs["sess_1"] = {101}
 
-        async def mock_execute(key, fn, **kwargs):
-            cmd = fn("fake_sid")
+        async def mock_run_or_raise(cmd, **kwargs):
             if "list" in cmd:
-                return MagicMock(data={
-                    "tabs": [
-                        {"tab_id": 101, "title": "Page 1", "url": "https://a.com", "active": False},
-                        {"tab_id": 102, "title": "Page 2", "url": "https://b.com", "active": True},
-                    ]
-                })
+                return BskResult(
+                    ok=True,
+                    exit_code=0,
+                    stdout="",
+                    stderr="",
+                    data={
+                        "tabs": [
+                            {"tab_id": 101, "title": "Page 1", "url": "https://a.com", "active": False},
+                            {"tab_id": 102, "title": "Page 2", "url": "https://b.com", "active": True},
+                        ]
+                    },
+                )
             elif "select" in cmd:
-                return MagicMock(data={"tab_id": 102})
-            return MagicMock(data={})
+                return BskResult(
+                    ok=True,
+                    exit_code=0,
+                    stdout="",
+                    stderr="",
+                    data={"tab_id": 102},
+                )
+            return BskResult(ok=True, exit_code=0, stdout="", stderr="", data={})
 
-        service.sessions.execute = AsyncMock(side_effect=mock_execute)
+        service.runner.run_or_raise = AsyncMock(side_effect=mock_run_or_raise)
+
+        async def mock_execute_action(key, action, **kwargs):
+            res = action("fake_sid")
+            if inspect.isawaitable(res):
+                res = await res
+            return res
+
+        service.sessions = MagicMock()
+        service.sessions.execute_action = mock_execute_action
 
         info = await service.detect_new_tabs_and_switch("sess_1")
         assert info is not None

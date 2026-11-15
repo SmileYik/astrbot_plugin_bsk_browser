@@ -1,9 +1,14 @@
 import inspect
+import sys
+from pathlib import Path
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
-from astrbot_plugin_bsk_browser.bsk.errors import BskError
-from astrbot_plugin_bsk_browser.bsk.models import BskResult, PageObservation
-from astrbot_plugin_bsk_browser.bsk.service import BskService
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from bsk.errors import BskError
+from bsk.models import BskResult, PageObservation
+from bsk.service import BskService
 
 
 class TestScreenshotResilience(unittest.IsolatedAsyncioTestCase):
@@ -11,8 +16,8 @@ class TestScreenshotResilience(unittest.IsolatedAsyncioTestCase):
         self.settings = MagicMock()
         self.settings.screenshot_dir = "/tmp/test_shots"
 
-    @patch("astrbot_plugin_bsk_browser.bsk.service.cleanup_shots", return_value=0)
-    @patch("astrbot_plugin_bsk_browser.bsk.service.verify_shot", return_value=(True, ""))
+    @patch("bsk.service.cleanup_shots", return_value=0)
+    @patch("bsk.service.verify_shot", return_value=(True, ""))
     async def test_screenshot_full_page_consumes_cached_observation_id(self, _mock_verify, _mock_cleanup) -> None:
         service = BskService(settings=self.settings, runner=MagicMock())
         service.sessions = MagicMock()
@@ -20,11 +25,8 @@ class TestScreenshotResilience(unittest.IsolatedAsyncioTestCase):
 
         executed_argv = []
 
-        async def mock_execute(key, builder, **kwargs):
-            res = builder("sid1") if callable(builder) else builder
-            if inspect.isawaitable(res):
-                res = await res
-            executed_argv.append(res)
+        async def mock_run_or_raise(argv, **kwargs):
+            executed_argv.append(argv)
             return BskResult(
                 ok=True,
                 exit_code=0,
@@ -33,7 +35,15 @@ class TestScreenshotResilience(unittest.IsolatedAsyncioTestCase):
                 data={"path": "/tmp/test_shots/shot.png", "width": 800, "height": 600, "byte_size": 1024},
             )
 
-        service.sessions.execute = mock_execute
+        service.runner.run_or_raise = AsyncMock(side_effect=mock_run_or_raise)
+
+        async def mock_execute_action(key, action, **kwargs):
+            res = action("sid1")
+            if inspect.isawaitable(res):
+                res = await res
+            return res
+
+        service.sessions.execute_action = mock_execute_action
         res = await service.screenshot("s1", full_page=True)
 
         self.assertEqual(res.path, "/tmp/test_shots/shot.png")
@@ -43,8 +53,8 @@ class TestScreenshotResilience(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(executed_argv[0][idx + 1], "obs-token-123")
         self.assertNotIn("s1", service._session_observations)
 
-    @patch("astrbot_plugin_bsk_browser.bsk.service.cleanup_shots", return_value=0)
-    @patch("astrbot_plugin_bsk_browser.bsk.service.verify_shot", return_value=(True, ""))
+    @patch("bsk.service.cleanup_shots", return_value=0)
+    @patch("bsk.service.verify_shot", return_value=(True, ""))
     async def test_screenshot_full_page_recovers_from_observation_required(self, _mock_verify, _mock_cleanup) -> None:
         service = BskService(settings=self.settings, runner=MagicMock())
         service.sessions = MagicMock()
@@ -52,13 +62,10 @@ class TestScreenshotResilience(unittest.IsolatedAsyncioTestCase):
         call_count = 0
         executed_argv = []
 
-        async def mock_execute(key, builder, **kwargs):
+        async def mock_run_or_raise(argv, **kwargs):
             nonlocal call_count
             call_count += 1
-            res = builder("sid1") if callable(builder) else builder
-            if inspect.isawaitable(res):
-                res = await res
-            executed_argv.append(res)
+            executed_argv.append(argv)
             if call_count == 1:
                 err = BskError("observation required", code="permission_denied")
                 err.reason = "observation_required"
@@ -72,7 +79,15 @@ class TestScreenshotResilience(unittest.IsolatedAsyncioTestCase):
                 data={"path": "/tmp/test_shots/shot2.png", "width": 800, "height": 600, "byte_size": 1024},
             )
 
-        service.sessions.execute = mock_execute
+        service.runner.run_or_raise = AsyncMock(side_effect=mock_run_or_raise)
+
+        async def mock_execute_action(key, action, **kwargs):
+            res = action("sid1")
+            if inspect.isawaitable(res):
+                res = await res
+            return res
+
+        service.sessions.execute_action = mock_execute_action
         service.sync_session = AsyncMock(
             return_value=PageObservation(observation_id="obs-fresh-456")
         )
@@ -87,8 +102,8 @@ class TestScreenshotResilience(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res.path, "/tmp/test_shots/shot2.png")
         self.assertNotIn("s1", service._session_observations)
 
-    @patch("astrbot_plugin_bsk_browser.bsk.service.cleanup_shots", return_value=0)
-    @patch("astrbot_plugin_bsk_browser.bsk.service.verify_shot", return_value=(True, ""))
+    @patch("bsk.service.cleanup_shots", return_value=0)
+    @patch("bsk.service.verify_shot", return_value=(True, ""))
     async def test_screenshot_ex_full_page_supports_explicit_and_cached_observation(self, _mock_verify, _mock_cleanup) -> None:
         service = BskService(settings=self.settings, runner=MagicMock())
         service.sessions = MagicMock()
@@ -96,11 +111,8 @@ class TestScreenshotResilience(unittest.IsolatedAsyncioTestCase):
 
         executed_argv = []
 
-        async def mock_execute(key, builder, **kwargs):
-            res = builder("sid1") if callable(builder) else builder
-            if inspect.isawaitable(res):
-                res = await res
-            executed_argv.append(res)
+        async def mock_run_or_raise(argv, **kwargs):
+            executed_argv.append(argv)
             return BskResult(
                 ok=True,
                 exit_code=0,
@@ -109,7 +121,15 @@ class TestScreenshotResilience(unittest.IsolatedAsyncioTestCase):
                 data={"path": "/tmp/test_shots/shot_ex.png", "width": 800, "height": 600, "byte_size": 1024},
             )
 
-        service.sessions.execute = mock_execute
+        service.runner.run_or_raise = AsyncMock(side_effect=mock_run_or_raise)
+
+        async def mock_execute_action(key, action, **kwargs):
+            res = action("sid1")
+            if inspect.isawaitable(res):
+                res = await res
+            return res
+
+        service.sessions.execute_action = mock_execute_action
         # 1. 自动消费缓存
         res1 = await service.screenshot_ex("s1", full_page=True)
         self.assertIn("--observation", executed_argv[0])
@@ -123,26 +143,32 @@ class TestScreenshotResilience(unittest.IsolatedAsyncioTestCase):
         idx2 = executed_argv[1].index("--observation")
         self.assertEqual(executed_argv[1][idx2 + 1], "obs-explicit")
 
-    @patch("astrbot_plugin_bsk_browser.bsk.service.cleanup_shots", return_value=0)
-    @patch("astrbot_plugin_bsk_browser.bsk.service.verify_shot", return_value=(True, ""))
-    @patch("astrbot_plugin_bsk_browser.bsk.service.truncate_image_height", return_value=("/tmp/test_shots/shot_trunc.png", True))
+    @patch("bsk.service.cleanup_shots", return_value=0)
+    @patch("bsk.service.verify_shot", return_value=(True, ""))
+    @patch("bsk.service.truncate_image_height", return_value=("/tmp/test_shots/shot_trunc.png", True))
     async def test_screenshot_ex_truncation_warning(self, mock_truncate, _mock_verify, _mock_cleanup) -> None:
         self.settings.fullpage_max_height = 5000
         self.settings.screenshot_compress_to_jpg = False
         service = BskService(settings=self.settings, runner=MagicMock())
         service.sessions = MagicMock()
 
-        async def mock_execute(key, builder, **kwargs):
-            return BskResult(
-                ok=True,
-                exit_code=0,
-                stdout="",
-                stderr="",
-                data={"path": "/tmp/test_shots/shot.png", "width": 800, "height": 10000, "byte_size": 2048},
-            )
+        service.runner.run_or_raise = AsyncMock(return_value=BskResult(
+            ok=True,
+            exit_code=0,
+            stdout="",
+            stderr="",
+            data={"path": "/tmp/test_shots/shot.png", "width": 800, "height": 10000, "byte_size": 2048},
+        ))
 
-        service.sessions.execute = mock_execute
+        async def mock_execute_action(key, action, **kwargs):
+            res = action("sid1")
+            if inspect.isawaitable(res):
+                res = await res
+            return res
+
+        service.sessions.execute_action = mock_execute_action
         res = await service.screenshot_ex("s1", full_page=True)
         self.assertIn("已按配置截断至最大高度 5000px", res.warning)
         self.assertEqual(res.height, 5000)
+
 

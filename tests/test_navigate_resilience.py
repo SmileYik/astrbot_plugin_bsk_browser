@@ -1,9 +1,14 @@
 import inspect
+import sys
+from pathlib import Path
 import unittest
 from unittest.mock import AsyncMock, MagicMock
-from astrbot_plugin_bsk_browser.bsk.errors import BskError
-from astrbot_plugin_bsk_browser.bsk.models import BskResult, PageObservation
-from astrbot_plugin_bsk_browser.bsk.service import BskService
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from bsk.errors import BskError
+from bsk.models import BskResult, PageObservation
+from bsk.service import BskService
 
 
 class TestNavigateResilience(unittest.IsolatedAsyncioTestCase):
@@ -14,13 +19,10 @@ class TestNavigateResilience(unittest.IsolatedAsyncioTestCase):
         call_count = 0
         executed_argv = []
 
-        async def mock_execute(key, builder, **kwargs):
+        async def mock_run_or_raise(argv, **kwargs):
             nonlocal call_count
             call_count += 1
-            res = builder("sid1") if callable(builder) else builder
-            if inspect.isawaitable(res):
-                res = await res
-            executed_argv.append(res)
+            executed_argv.append(argv)
             if call_count == 1:
                 err = BskError("observation required", code="permission_denied")
                 err.reason = "observation_required"
@@ -34,7 +36,15 @@ class TestNavigateResilience(unittest.IsolatedAsyncioTestCase):
                 data={"url": "https://www.baidu.com"},
             )
 
-        service.sessions.execute = mock_execute
+        service.runner.run_or_raise = AsyncMock(side_effect=mock_run_or_raise)
+
+        async def mock_execute_action(key, action, **kwargs):
+            res = action("sid1")
+            if inspect.isawaitable(res):
+                res = await res
+            return res
+
+        service.sessions.execute_action = mock_execute_action
         service.sync_session = AsyncMock(
             return_value=PageObservation(observation_id="obs-nav-1")
         )
@@ -46,3 +56,4 @@ class TestNavigateResilience(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(executed_argv[1][idx + 1], "obs-nav-1")
         self.assertEqual(res["url"], "https://www.baidu.com")
         self.assertNotIn("s1", service._session_observations)
+

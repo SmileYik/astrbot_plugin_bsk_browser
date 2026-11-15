@@ -1,9 +1,14 @@
 import inspect
+import sys
+from pathlib import Path
 import unittest
 from unittest.mock import AsyncMock, MagicMock
-from astrbot_plugin_bsk_browser.bsk.errors import BskError
-from astrbot_plugin_bsk_browser.bsk.models import BskResult, PageObservation
-from astrbot_plugin_bsk_browser.bsk.service import BskService
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from bsk.errors import BskError
+from bsk.models import BskResult, PageObservation
+from bsk.service import BskService
 
 
 class TestInteractObservationRetry(unittest.IsolatedAsyncioTestCase):
@@ -14,11 +19,8 @@ class TestInteractObservationRetry(unittest.IsolatedAsyncioTestCase):
 
         executed_argv = []
 
-        async def mock_execute(key, builder, **kwargs):
-            res = builder("sid1") if callable(builder) else builder
-            if inspect.isawaitable(res):
-                res = await res
-            executed_argv.append(res)
+        async def mock_run_or_raise(argv, **kwargs):
+            executed_argv.append(argv)
             return BskResult(
                 ok=True,
                 exit_code=0,
@@ -27,7 +29,15 @@ class TestInteractObservationRetry(unittest.IsolatedAsyncioTestCase):
                 data={"delta_y": 500, "tab_id": 1},
             )
 
-        service.sessions.execute = mock_execute
+        service.runner.run_or_raise = AsyncMock(side_effect=mock_run_or_raise)
+
+        async def mock_execute_action(key, action, **kwargs):
+            res = action("sid1")
+            if inspect.isawaitable(res):
+                res = await res
+            return res
+
+        service.sessions.execute_action = mock_execute_action
         res = await service.interact("s1", "wheel", delta_y=500)
 
         self.assertIn("--observation", executed_argv[0])
@@ -44,13 +54,10 @@ class TestInteractObservationRetry(unittest.IsolatedAsyncioTestCase):
         call_count = 0
         executed_argv = []
 
-        async def mock_execute(key, builder, **kwargs):
+        async def mock_run_or_raise(argv, **kwargs):
             nonlocal call_count
             call_count += 1
-            res = builder("sid1") if callable(builder) else builder
-            if inspect.isawaitable(res):
-                res = await res
-            executed_argv.append(res)
+            executed_argv.append(argv)
             if call_count == 1:
                 err = BskError("observation required", code="permission_denied")
                 err.reason = "observation_required"
@@ -64,7 +71,15 @@ class TestInteractObservationRetry(unittest.IsolatedAsyncioTestCase):
                 data={"delta_y": 500, "tab_id": 1},
             )
 
-        service.sessions.execute = mock_execute
+        service.runner.run_or_raise = AsyncMock(side_effect=mock_run_or_raise)
+
+        async def mock_execute_action(key, action, **kwargs):
+            res = action("sid1")
+            if inspect.isawaitable(res):
+                res = await res
+            return res
+
+        service.sessions.execute_action = mock_execute_action
         service.sync_session = AsyncMock(
             return_value=PageObservation(observation_id="obs-fresh-2")
         )
@@ -85,13 +100,10 @@ class TestInteractObservationRetry(unittest.IsolatedAsyncioTestCase):
         call_count = 0
         executed_argv = []
 
-        async def mock_execute(key, builder, **kwargs):
+        async def mock_run_or_raise(argv, **kwargs):
             nonlocal call_count
             call_count += 1
-            res = builder("sid1") if callable(builder) else builder
-            if inspect.isawaitable(res):
-                res = await res
-            executed_argv.append(res)
+            executed_argv.append(argv)
             if call_count == 1:
                 err = BskError("focus changed", code="permission_denied")
                 err.reason = "control_context_invalid"
@@ -105,7 +117,15 @@ class TestInteractObservationRetry(unittest.IsolatedAsyncioTestCase):
                 data={"key": "Enter", "tab_id": 1},
             )
 
-        service.sessions.execute = mock_execute
+        service.runner.run_or_raise = AsyncMock(side_effect=mock_run_or_raise)
+
+        async def mock_execute_action(key, action, **kwargs):
+            res = action("sid1")
+            if inspect.isawaitable(res):
+                res = await res
+            return res
+
+        service.sessions.execute_action = mock_execute_action
         service.sync_session = AsyncMock(
             return_value=PageObservation(observation_id="obs-fresh-3")
         )
@@ -125,11 +145,8 @@ class TestInteractObservationRetry(unittest.IsolatedAsyncioTestCase):
 
         executed_argv = []
 
-        async def mock_execute(key, builder, **kwargs):
-            res = builder("sid1") if callable(builder) else builder
-            if inspect.isawaitable(res):
-                res = await res
-            executed_argv.append(res)
+        async def mock_run_or_raise(argv, **kwargs):
+            executed_argv.append(argv)
             return BskResult(
                 ok=True,
                 exit_code=0,
@@ -138,7 +155,15 @@ class TestInteractObservationRetry(unittest.IsolatedAsyncioTestCase):
                 data={"delta_y": 500, "tab_id": 1},
             )
 
-        service.sessions.execute = mock_execute
+        service.runner.run_or_raise = AsyncMock(side_effect=mock_run_or_raise)
+
+        async def mock_execute_action(key, action, **kwargs):
+            res = action("sid1")
+            if inspect.isawaitable(res):
+                res = await res
+            return res
+
+        service.sessions.execute_action = mock_execute_action
         await service.interact("s1", "wheel", delta_y=500, observation_id="caller-supplied-token")
 
         self.assertIn("--observation", executed_argv[0])
@@ -155,13 +180,10 @@ class TestInteractObservationRetry(unittest.IsolatedAsyncioTestCase):
         executed_argv = []
         sync_counter = 0
 
-        async def mock_execute(key, builder, **kwargs):
-            res = builder("sid1") if callable(builder) else builder
-            if inspect.isawaitable(res):
-                res = await res
-            executed_argv.append(res)
+        async def mock_run_or_raise(argv, **kwargs):
+            executed_argv.append(argv)
             # 如果没有传 --observation，底层抛出 observation_required
-            if "--observation" not in res:
+            if "--observation" not in argv:
                 err = BskError("observation required", code="permission_denied")
                 err.reason = "observation_required"
                 err.effect_state = "none"
@@ -174,12 +196,21 @@ class TestInteractObservationRetry(unittest.IsolatedAsyncioTestCase):
                 data={"delta_y": 500, "tab_id": 1},
             )
 
+        service.runner.run_or_raise = AsyncMock(side_effect=mock_run_or_raise)
+
+        async def mock_execute_action(key, action, **kwargs):
+            res = action("sid1")
+            if inspect.isawaitable(res):
+                res = await res
+            return res
+
+        service.sessions.execute_action = mock_execute_action
+
         async def mock_sync(session_key, **kwargs):
             nonlocal sync_counter
             sync_counter += 1
             return PageObservation(observation_id=f"obs-synced-{sync_counter}")
 
-        service.sessions.execute = mock_execute
         service.sync_session = mock_sync
 
         # 第一次滚动：命中初始缓存
@@ -197,3 +228,4 @@ class TestInteractObservationRetry(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(res3.get("auto_synced"))
         self.assertIn("obs-synced-2", executed_argv[-1])
         self.assertEqual(sync_counter, 2)
+

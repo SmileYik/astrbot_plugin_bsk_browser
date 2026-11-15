@@ -1,13 +1,19 @@
 import asyncio
-import pytest
+import inspect
+import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from bsk.service import BskService
 from bsk.errors import BskError, BskUserError
-from bsk.models import PageObservation
+from bsk.models import BskResult, PageObservation
 
 def test_wheel_auto_recovers_from_observation_changed():
     async def _test():
-        service = BskService(settings=MagicMock())
+        runner = AsyncMock()
+        service = BskService(settings=MagicMock(), runner=runner)
         service.sessions = MagicMock()
         service._resolve_key = MagicMock(return_value="test_session")
         service._timeout = MagicMock(return_value=30.0)
@@ -16,8 +22,16 @@ def test_wheel_auto_recovers_from_observation_changed():
         
         # 模拟第一次执行 wheel 抛出 observation_changed，重试后成功
         err = BskError("changed", reason="observation_changed", effect_state="none")
-        success_result = MagicMock(data={"delta_y": 2000})
-        service.sessions.execute = AsyncMock(side_effect=[err, success_result])
+        success_result = BskResult(ok=True, exit_code=0, stdout="", stderr="", data={"delta_y": 2000})
+        runner.run_or_raise = AsyncMock(side_effect=[err, success_result])
+
+        async def mock_execute_action(key, action, **kwargs):
+            res = action("test_session")
+            if inspect.isawaitable(res):
+                res = await res
+            return res
+
+        service.sessions.execute_action = mock_execute_action
         
         new_obs = PageObservation(text="test", title="Test")
         new_obs.observation_id = "new_obs_token"
@@ -27,27 +41,35 @@ def test_wheel_auto_recovers_from_observation_changed():
         assert result["delta_y"] == 2000
         assert result["auto_synced"] is True
         assert service.sync_session.called
-        assert service.sessions.execute.call_count == 2
+        assert runner.run_or_raise.call_count == 2
         # 验证重试时使用的 observation_id 为 new_obs_token
-        second_call_builder = service.sessions.execute.call_args_list[1][0][1]
-        argv = second_call_builder("test_session")
-        assert "--observation" in argv
-        obs_idx = argv.index("--observation")
-        assert argv[obs_idx + 1] == "new_obs_token"
+        second_call_argv = runner.run_or_raise.call_args_list[1][0][0]
+        assert "--observation" in second_call_argv
+        obs_idx = second_call_argv.index("--observation")
+        assert second_call_argv[obs_idx + 1] == "new_obs_token"
 
     asyncio.run(_test())
 
 def test_click_invalidates_session_observations_cache():
     async def _test():
-        service = BskService(settings=MagicMock())
+        runner = AsyncMock()
+        service = BskService(settings=MagicMock(), runner=runner)
         service.sessions = MagicMock()
         service._resolve_key = MagicMock(return_value="test_session")
         service._timeout = MagicMock(return_value=30.0)
         service._interact_timeout_builtin = MagicMock(return_value=30.0)
         service._session_observations["test_session"] = "stale_obs_token"
         
-        success_result = MagicMock(data={"used_ref": "e1"})
-        service.sessions.execute = AsyncMock(return_value=success_result)
+        success_result = BskResult(ok=True, exit_code=0, stdout="", stderr="", data={"used_ref": "e1"})
+        runner.run_or_raise = AsyncMock(return_value=success_result)
+
+        async def mock_execute_action(key, action, **kwargs):
+            res = action("test_session")
+            if inspect.isawaitable(res):
+                res = await res
+            return res
+
+        service.sessions.execute_action = mock_execute_action
         
         # 点击执行成功
         await service.interact("test_session", "click", target="@e1")
@@ -56,4 +78,5 @@ def test_click_invalidates_session_observations_cache():
         assert "test_session" not in service._session_observations
 
     asyncio.run(_test())
+
 
