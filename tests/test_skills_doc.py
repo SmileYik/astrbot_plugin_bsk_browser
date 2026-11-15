@@ -20,10 +20,22 @@ class TestSkillsDoc(unittest.TestCase):
         self.assertIn("close", bsk_content)
         self.assertIn("full_page", bsk_content)
         self.assertTrue("新标签页" in bsk_content or "新标签" in bsk_content)
-        self.assertIn("压缩", bsk_content)
         self.assertIn("bsk_status", bsk_content)
         for removed in ("bsk_close", "bsk_logs", "bsk_open", "bsk_read", "bsk_act"):
             self.assertNotIn(removed, bsk_content, f"{removed} should not be in bsk-browser/SKILL.md")
+
+        # 后台配置项不得暴露在 SKILL 文档中
+        for doc in (bsk_browser, baidu, bing):
+            text = doc.read_text(encoding="utf-8")
+            for forbidden in (
+                "screenshot_compress_to_jpg",
+                "screenshot_quality",
+                "fullpage_max_height",
+                "fullpage_scope",
+                "site_whitelist",
+                "allowed_actions",
+            ):
+                self.assertNotIn(forbidden, text, f"{forbidden} should not be exposed in {doc.name}")
         
         # 百度和必应文档必须包含新标签页阅读与关闭指引
         for doc in (baidu, bing):
