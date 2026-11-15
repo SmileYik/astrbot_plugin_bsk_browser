@@ -239,6 +239,28 @@ class TestPermissionDeniedReasons(unittest.TestCase):
         self.assertIn("bsk_session(action='sync')", err.friendly)
         self.assertEqual(err.reason, "cooperation_sync_required")
 
+    def test_observation_required_friendly(self) -> None:
+        err = errors.classify(
+            exit_code=1,
+            code="permission_denied",
+            message="This action requires an unused strict observation",
+            reason="observation_required",
+        )
+        self.assertIn("观察令牌", err.friendly)
+        self.assertIn("bsk_session(action='sync')", err.friendly)
+        self.assertEqual(err.reason, "observation_required")
+
+    def test_control_context_invalid_friendly(self) -> None:
+        err = errors.classify(
+            exit_code=1,
+            code="permission_denied",
+            message="The control context is no longer valid",
+            reason="control_context_invalid",
+        )
+        self.assertIn("控制上下文已改变", err.friendly)
+        self.assertIn("bsk_session(action='sync')", err.friendly)
+        self.assertEqual(err.reason, "control_context_invalid")
+
     def test_not_found_with_ref_not_found_returns_user_error(self) -> None:
         err = errors.classify(
             exit_code=1,

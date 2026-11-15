@@ -2720,7 +2720,12 @@ class BskService:
         target = str(opts.get("target") or "").strip()
 
         # 前置注入并消耗 observation 令牌（针对无目标 wheel / press）
-        if action in ("wheel", "press") and not target and session_key in self._session_observations:
+        if (
+            action in ("wheel", "press")
+            and not target
+            and "observation_id" not in opts
+            and session_key in self._session_observations
+        ):
             opts["observation_id"] = self._session_observations.pop(session_key, None)
 
         argv, readonly = self._build_interact_args(action, opts)

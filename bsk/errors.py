@@ -357,6 +357,8 @@ def classify(
             friendly = "浏览器拒绝了这次操作：该动作只允许在 bsk 自己的窗口里执行（若需操作其它标签页，请先使用 bsk_tabs(action='borrow') 借用）。"
         elif reason == "cooperation_sync_required":
             friendly = "当前页面控制权未同步或已失效，请先调用 bsk_session(action='sync') 同步页面控制权后再操作。"
+        elif reason in ("observation_required", "control_context_invalid"):
+            friendly = "当前页面状态或控制上下文已改变（需要有效观察令牌），请先调用 bsk_session(action='sync') 同步页面控制权与观察令牌后再操作。"
         elif reason == "control_authority_required":
             friendly = "当前页面需要用户控制权或外部确认，暂时无法直接操作。"
         else:

@@ -117,3 +117,83 @@ class TestInteractObservationRetry(unittest.IsolatedAsyncioTestCase):
         idx = executed_argv[1].index("--observation")
         self.assertEqual(executed_argv[1][idx + 1], "obs-fresh-3")
         self.assertTrue(res.get("auto_synced"))
+
+    async def test_wheel_explicit_observation_id_not_overwritten(self) -> None:
+        service = BskService(settings=MagicMock(), runner=MagicMock())
+        service.sessions = MagicMock()
+        service._session_observations["s1"] = "cached-obs-token"
+
+        executed_argv = []
+
+        async def mock_execute(key, builder, **kwargs):
+            res = builder("sid1") if callable(builder) else builder
+            if inspect.isawaitable(res):
+                res = await res
+            executed_argv.append(res)
+            return BskResult(
+                ok=True,
+                exit_code=0,
+                stdout="",
+                stderr="",
+                data={"delta_y": 500, "tab_id": 1},
+            )
+
+        service.sessions.execute = mock_execute
+        await service.interact("s1", "wheel", delta_y=500, observation_id="caller-supplied-token")
+
+        self.assertIn("--observation", executed_argv[0])
+        idx = executed_argv[0].index("--observation")
+        self.assertEqual(executed_argv[0][idx + 1], "caller-supplied-token")
+        # 缓存中的令牌未被覆盖或意外清除
+        self.assertEqual(service._session_observations.get("s1"), "cached-obs-token")
+
+    async def test_consecutive_untargeted_wheels_succeed(self) -> None:
+        service = BskService(settings=MagicMock(), runner=MagicMock())
+        service.sessions = MagicMock()
+        service._session_observations["s1"] = "obs-initial-1"
+
+        executed_argv = []
+        sync_counter = 0
+
+        async def mock_execute(key, builder, **kwargs):
+            res = builder("sid1") if callable(builder) else builder
+            if inspect.isawaitable(res):
+                res = await res
+            executed_argv.append(res)
+            # 如果没有传 --observation，底层抛出 observation_required
+            if "--observation" not in res:
+                err = BskError("observation required", code="permission_denied")
+                err.reason = "observation_required"
+                err.effect_state = "none"
+                raise err
+            return BskResult(
+                ok=True,
+                exit_code=0,
+                stdout="",
+                stderr="",
+                data={"delta_y": 500, "tab_id": 1},
+            )
+
+        async def mock_sync(session_key, **kwargs):
+            nonlocal sync_counter
+            sync_counter += 1
+            return PageObservation(observation_id=f"obs-synced-{sync_counter}")
+
+        service.sessions.execute = mock_execute
+        service.sync_session = mock_sync
+
+        # 第一次滚动：命中初始缓存
+        res1 = await service.interact("s1", "wheel", delta_y=500)
+        self.assertFalse(res1.get("auto_synced"))
+        self.assertIn("obs-initial-1", executed_argv[0])
+
+        # 第二次连续滚动：缓存已被消耗，首次触发 observation_required，随后自动 sync 重试成功
+        res2 = await service.interact("s1", "wheel", delta_y=500)
+        self.assertTrue(res2.get("auto_synced"))
+        self.assertIn("obs-synced-1", executed_argv[-1])
+
+        # 第三次连续滚动：再次自动自愈重试成功
+        res3 = await service.interact("s1", "wheel", delta_y=500)
+        self.assertTrue(res3.get("auto_synced"))
+        self.assertIn("obs-synced-2", executed_argv[-1])
+        self.assertEqual(sync_counter, 2)
