@@ -72,50 +72,11 @@ LOGS_LABELS: dict[str, str] = {
     "network": "网络请求",
 }
 
-# 8 个旧工具的名字，按用途分成两组。``legacy_tools=false`` 时两组一起停用
-# （见 ``_deactivate_legacy_tools``）；``legacy_tools=true`` 且
-# ``legacy_fringe_tools=false`` 时只停用 fringe 那一组。
-#
-# 分组依据是"有没有等价的新工具"，以及"日常用不用得上"：
-#
-# - core：常用且**没有**等价替代的 3 个。``bsk_status`` 是本插件唯一的诊断入口；
-#   ``bsk_close`` 关会话；``bsk_logs`` 读控制台/网络日志。
-#   （原 ``bsk_screenshot`` 已彻底下线并合入新工具 ``bsk_inspect(action="screenshot")``）。
-# - fringe：都有等价新工具，只是名字不同（``bsk_open`` → ``bsk_page``/``bsk_session``、
-#   ``bsk_read`` → ``bsk_inspect``、``bsk_act`` → ``bsk_interact``），所以默认不注册，
-#   省下约 1900 字符的固定 prompt 开销（实测三格式 1941/2013/2061 取最小值）；
-#   仍在用旧名字的用户可以打开配置项找回它们。
-#
-# ``bsk_evaluate`` 在两个元组的**并集**里，但停用时会被跳过：它是**独立的高危开关**
-# （``enable_evaluate``），把它绑到 ``legacy_tools``/``legacy_fringe_tools`` 上会让
-# 用户误以为"关掉旧工具"就等于"关掉执行脚本"，而实际上它是被另一项控制的。
-LEGACY_CORE_TOOL_NAMES: tuple[str, ...] = (
-    "bsk_close",
-    "bsk_status",
-    "bsk_logs",
-)
-
-LEGACY_FRINGE_TOOL_NAMES: tuple[str, ...] = (
-    "bsk_open",
-    "bsk_read",
-    "bsk_act",
-)
-
-LEGACY_TOOL_NAMES: tuple[str, ...] = (
-    "bsk_open",
-    "bsk_read",
-    "bsk_act",
-    "bsk_close",
+# 独立扩展工具名单（bsk_status 自检，bsk_evaluate 脚本执行）
+OPTIONAL_STANDALONE_TOOLS: tuple[str, ...] = (
     "bsk_status",
     "bsk_evaluate",
-    "bsk_logs",
 )
-"""7 个旧工具的完整名单（= core + fringe + ``bsk_evaluate``），顺序与定义先后一致。
-
-保留它是为了不破坏既有引用（文档、其它检查脚本按这 8 个名字核对注册数）。
-运行时真正用来决定停用哪一组的是 :data:`LEGACY_CORE_TOOL_NAMES` 与
-:data:`LEGACY_FRINGE_TOOL_NAMES`。
-"""
 
 # 8 个新工具的名字（schema 来自 ``bsk/tools.py`` 的 ``TOOL_SCHEMAS``）。
 #
@@ -633,21 +594,25 @@ class BskBrowserPlugin(Star):
         # 在构造时对 parameters 做的是**快照**，不是实时视图。
         self._apply_tool_schemas()
 
-        # 旧工具分两级开关：
-        #
-        # - ``legacy_tools=false``：8 个旧工具全部停用（只剩 8 个新工具 +
-        #   ``bsk_evaluate`` 若它自己的开关也开着）。默认 true：老用户升级无感
-        #   —— 若默认 false，等于**静默删掉** 8 个工具。
-        # - ``legacy_tools=true`` 且 ``legacy_fringe_tools=false``（后者的默认值）：
-        #   只停用有等价新工具的那 3 个（``bsk_open``/``bsk_read``/``bsk_act``），
-        #   常用且无替代品的 4 个继续注册。这样用户不必"全开或全关"。
-        #
-        # ``bsk_evaluate`` 不进任何一组，它只由 ``enable_evaluate`` 决定 —— 见
-        # ``_deactivate_legacy_tools`` 里的跳过分支。
-        if not self.settings.legacy_tools:
-            self._deactivate_legacy_tools()
-        elif not self.settings.legacy_fringe_tools:
-            self._deactivate_legacy_tools(fringe_only=True)
+        from astrbot.core.provider.register import llm_tools
+
+        # 控制 bsk_status 注册
+        if not self.settings.enable_status:
+            status_tool = llm_tools.get_func("bsk_status")
+            if status_tool is not None:
+                status_tool.active = False
+                astrbot_logger.debug(
+                    "[bsk_browser] 已停用工具 bsk_status（配置项 enable_status=false）"
+                )
+
+        # 控制 bsk_evaluate 注册
+        if not self.settings.enable_evaluate:
+            eval_tool = llm_tools.get_func("bsk_evaluate")
+            if eval_tool is not None:
+                eval_tool.active = False
+                astrbot_logger.debug(
+                    "[bsk_browser] 已停用工具 bsk_evaluate（配置项 enable_evaluate=false）"
+                )
 
         # 第 8 个工具（bsk_load_tools）负责把 bsk_debug 按需加进当轮请求。
         # 默认开启时 bsk_debug 一开始不注册 —— 它那 4431 字符的 schema 只在
@@ -737,42 +702,6 @@ class BskBrowserPlugin(Star):
                     name,
                 )
 
-    def _deactivate_legacy_tools(self, *, fringe_only: bool = False) -> None:
-        """停用旧工具（``bsk_evaluate`` 除外，它有自己的开关）。
-
-        Args:
-            fringe_only: ``False``（默认）停用**全部** 8 个旧工具
-                （``legacy_tools=false`` 走这条）；``True`` 只停用 fringe 那一组
-                的 3 个（``legacy_tools=true`` 且 ``legacy_fringe_tools=false``
-                走这条），core 那 4 个保持注册。
-
-        为什么直接设 ``tool.active = False`` 而不是调框架的
-        ``deactivate_llm_tool_async``：后者会把这个名字写进**持久化**的
-        ``inactivated_llm_tools``（全局 SharedPreferences）。用户只是临时关掉
-        ``legacy_tools`` 试试，却会在全局配置里留下永久痕迹，卸载插件也带不走
-        ——下次装回来那 8 个工具还是关着的。直接设 ``active`` 只影响本次进程，
-        随插件重载自然恢复。
-
-        Note:
-            两个已知的边界，都已在 ``_conf_schema.json`` 的 hint 里如实写明：
-
-            1. 用户若在 AstrBot WebUI 的「扩展 → 组件」里手动关过某个旧工具，
-               ``star_manager`` 每次加载都会重算
-               ``ft.active = not plugin_disabled and ft.name not in inactivated_llm_tools``
-               —— 那是在本方法**之后**跑的，所以那一项始终优先；
-            2. 本方法只在插件加载时执行一次，改配置需要重新加载插件。
-        """
-        from astrbot.core.provider.register import llm_tools
-
-        names = LEGACY_FRINGE_TOOL_NAMES if fringe_only else LEGACY_TOOL_NAMES
-        for name in names:
-            if name == "bsk_evaluate":
-                # 它有自己的开关（enable_evaluate）且是独立的高危工具，
-                # 不该跟着"旧工具"一起被关掉，见 LEGACY_TOOL_NAMES 的注释。
-                continue
-            tool = llm_tools.get_func(name)
-            if tool is not None:
-                tool.active = False
 
     def _deactivate_lazy_tools(self) -> None:
         """按需加载：把 :data:`LAZY_TOOL_NAMES` 里的工具先设为不注册。
@@ -2131,183 +2060,7 @@ class BskBrowserPlugin(Star):
         return await self._dispatch("bsk_assist", event, kwargs)
 
     # ------------------------------------------------------------------
-    # 工具 1：打开网页
-    # ------------------------------------------------------------------
-
-    @filter.llm_tool("bsk_open")
-    @_trace_tool_call("bsk_open")
-    async def bsk_open(self, event: AstrMessageEvent, url: str, new_session: bool = False):
-        """用浏览器打开一个网页，并返回页面标题和可交互元素。
-
-        （兼容保留，新用法请优先用 `bsk_page`（action="navigate"）。）
-        会复用当前聊天已有的浏览器会话；如果没有就新建一个。
-        打开后请用 bsk_read 重新读取页面，或用 bsk_act 操作元素。
-
-        Args:
-            url(string): 要打开的网址，必须以 http:// 或 https:// 开头
-            new_session(boolean): 设为 true 会关掉当前浏览器会话并重新开一个（用于页面卡死或需要重新登录时）
-        """
-        denied = self._denied(event)
-        if denied:
-            return self._fail(denied)
-
-        target = (url or "").strip()
-        if not target:
-            return self._fail("请提供要打开的网址。")
-        if not target.lower().startswith(("http://", "https://")):
-            return self._fail(
-                "网址必须以 http:// 或 https:// 开头。"
-                "例如 https://example.com。"
-            )
-
-        key = self._key(event)
-        try:
-            if new_session:
-                await self.service.close_session(key)
-
-            nav, observation = await self.service.open_page(key, target)
-            page_text = self.service.render_page(observation)
-
-            landed = nav.final_url or target
-            header = f"已打开：{landed}"
-            if nav.final_url and nav.final_url.rstrip("/") != target.rstrip("/"):
-                header = f"已打开：{target}\n实际落点：{nav.final_url}（发生了跳转）"
-            return f"{header}\n\n{page_text}"
-        except BskError as exc:
-            return self._fail(f"打开网页失败：{exc.friendly}{exc.format_diagnostic()}")
-        except Exception as exc:  # noqa: BLE001 - 兜底，绝不让异常穿到框架
-            astrbot_logger.exception("[bsk_browser] bsk_open 未预期错误")
-            return self._fail(f"打开网页时出现未预期的错误：{exc}")
-
-    # ------------------------------------------------------------------
-    # 工具 2：读取页面
-    # ------------------------------------------------------------------
-
-    @filter.llm_tool("bsk_read")
-    @_trace_tool_call("bsk_read")
-    async def bsk_read(self, event: AstrMessageEvent):
-        """读取当前浏览器页面的内容和可交互元素编号。
-
-        （兼容保留，新用法请优先用 `bsk_inspect`（action="observe"）。）
-        返回页面标题、正文摘要，以及形如 @e1、@e2 的元素编号。
-        这些编号可以直接用在 bsk_act 的 target 参数里。
-        页面刚变化过时建议先调用本工具，因为编号可能会变。
-
-        Args:
-        """
-        denied = self._denied(event)
-        if denied:
-            return self._fail(denied)
-
-        key = self._key(event)
-        try:
-            observation = await self.service.observe(key)
-            return self.service.render_page(observation)
-        except BskError as exc:
-            return self._fail(f"读取页面失败：{exc.friendly}{exc.format_diagnostic()}")
-        except Exception as exc:  # noqa: BLE001
-            astrbot_logger.exception("[bsk_browser] bsk_read 未预期错误")
-            return self._fail(f"读取页面时出现未预期的错误：{exc}")
-
-    # ------------------------------------------------------------------
-    # 工具 3：页面交互
-    # ------------------------------------------------------------------
-
-    @filter.llm_tool("bsk_act")
-    @_trace_tool_call("bsk_act")
-    async def bsk_act(
-        self,
-        event: AstrMessageEvent,
-        action: str,
-        target: str = "",
-        value: str = "",
-        key_spec: str = "",
-        delta_y: int = 0,
-        delta_x: int = 0,
-    ):
-        """在当前浏览器页面上执行一个操作（点击、输入、按键、滚动等）。
-
-        （兼容保留，新用法请优先用 `bsk_interact`：click → 保持不变，
-        hover / wheel / focus / blur / fill / select / press 也都在它里面；
-        本工具独有的 reload → `bsk_page`（action="reload"）、
-        navigate_back → `bsk_page`（action="back"）、
-        navigate_forward → `bsk_page`（action="forward"）、
-        wait_for_navigation → `bsk_page`（action="wait"）。）
-        操作完成后建议调用 bsk_read 确认结果，因为页面变化后元素编号会变。
-        如果页面正在加载（点了会跳转的链接、提交表单后），可以先用
-        wait_for_navigation 等它加载完，再去读取，否则可能读到旧页面。
-
-        Args:
-            action(string): 要执行的动作，可选值：click(点击)、fill(输入文字)、press(按键)、select(下拉框选择)、hover(鼠标悬停)、scroll_to(滚动到元素)、wheel(滚动页面)、focus(聚焦)、blur(失焦)、reload(刷新)、navigate_back(后退)、navigate_forward(前进)、wait_for_navigation(等待页面加载完成)
-            target(string): 元素编号（如 @e3）或 CSS 选择器。click/fill/select/hover/scroll_to/focus/blur 必填；press 可选（填了就表示先聚焦该元素再按键）；wait_for_navigation 不需要
-            value(string): fill 要输入的文字，或 select 要选中的选项值
-            key_spec(string): press 要按的键，例如 Enter、Escape、Tab、Ctrl+A、ArrowDown
-            delta_y(number): wheel 的垂直滚动量，正数向下、负数向上，单位像素，例如 500
-            delta_x(number): wheel 的水平滚动量，正数向右、负数向左
-        """
-        denied = self._denied(event)
-        if denied:
-            return self._fail(denied)
-
-        key = self._key(event)
-        action_norm = (action or "").strip().lower().replace("-", "_")
-        try:
-            result = await self.service.act(
-                key,
-                action_norm,
-                target=(target or "").strip(),
-                value=value or "",
-                key_spec=(key_spec or "").strip(),
-                delta_y=int(delta_y or 0),
-                delta_x=int(delta_x or 0),
-            )
-            note = f"（{result.note}）" if result.note else ""
-            # bsk 的回执里带了 url / changed 时才算得出"页面变了没有"；
-            # 说不准就不说 —— 不要用一个猜出来的结论误导模型。
-            if result.page_changed:
-                hint = "页面已变化，建议接着用 bsk_read 确认新内容。"
-            else:
-                hint = "建议接着用 bsk_read 确认页面变化。"
-            return f"已执行 {action_norm}{note}。{hint}"
-        except BskError as exc:
-            return self._fail(f"操作失败：{exc.friendly}{exc.format_diagnostic()}")
-        except ValueError as exc:
-            return self._fail(f"参数格式不对：{exc}")
-        except Exception as exc:  # noqa: BLE001
-            astrbot_logger.exception("[bsk_browser] bsk_act 未预期错误")
-            return self._fail(f"执行操作时出现未预期的错误：{exc}")
-
-    # ------------------------------------------------------------------
-    # 工具 4：关闭会话
-    # ------------------------------------------------------------------
-
-    @filter.llm_tool("bsk_close")
-    @_trace_tool_call("bsk_close")
-    async def bsk_close(self, event: AstrMessageEvent):
-        """关闭当前聊天正在使用的浏览器会话（会关掉那个 Agent Window）。
-
-        （兼容保留，新用法请优先用 `bsk_session`（action="stop"）。）
-        用户说"关掉浏览器""不用了""结束"时调用这个。
-        长时间不用的会话也会自动回收，但显式关闭更干净。
-
-        Args:
-        """
-        denied = self._denied(event)
-        if denied:
-            return self._fail(denied)
-
-        key = self._key(event)
-        try:
-            closed = await self.service.close_session(key)
-            if closed:
-                return "已关闭浏览器会话。"
-            return "当前没有正在使用的浏览器会话。"
-        except Exception as exc:  # noqa: BLE001
-            astrbot_logger.exception("[bsk_browser] bsk_close 未预期错误")
-            return self._fail(f"关闭浏览器会话时出现未预期的错误：{exc}")
-
-    # ------------------------------------------------------------------
-    # 工具 5：诊断
+    # 独立扩展工具：环境自检
     # ------------------------------------------------------------------
 
     @filter.llm_tool("bsk_status")
@@ -2449,83 +2202,4 @@ class BskBrowserPlugin(Star):
             astrbot_logger.exception("[bsk_browser] bsk_evaluate 未预期错误")
             return self._fail(f"执行脚本时出现未预期的错误：{exc}")
 
-    # ------------------------------------------------------------------
-    # 工具 7：读取控制台消息与网络请求（只读，与 bsk_read 同级）
-    # ------------------------------------------------------------------
 
-    @filter.llm_tool("bsk_logs")
-    @_trace_tool_call("bsk_logs")
-    async def bsk_logs(
-        self, event: AstrMessageEvent, kind: str = "console", since: float = 0
-    ):
-        """读取浏览器页面上捕获的控制台消息或网络请求，用于排查页面问题。
-
-        （兼容保留，新用法请优先用 `bsk_inspect`：读控制台用
-        action="console"，读网络请求用 action="network"。）
-        什么时候用它：
-        - 页面看起来没反应、报错、按钮点了没效果，想知道背后发生了什么；
-        - 页面数据没显示出来，想确认某个接口是不是请求失败或返回了错误状态码；
-        - 用户在页面上提交了表单后，想确认请求发出去了没有。
-
-        它只读日志，不会改动页面，也不会执行任何代码。
-        日志是累积的：同一个浏览器会话里，每次调用都从上次读到的位置往后接着读，
-        所以返回里会告诉你下次该传什么 since 值，你只要把它原样传回来即可。
-        一次最多展示 50 条，很长的网址会被截断。
-
-        Args:
-            kind(string): 要读哪种日志，填 console 读浏览器控制台消息（页面的报错、警告、脚本输出），填 network 读网络请求（每个请求的方法、状态码、网址）。默认 console
-            since(number): 增量游标，只返回序号大于它的新日志；第一次调用填 0（或不填）从头读，之后把上一次返回里的「下次请传 since=...」那个数字填进来。默认 0
-        """
-        denied = self._denied(event)
-        if denied:
-            return self._fail(denied)
-
-        kind_norm = (kind or "").strip().lower()
-        if kind_norm not in LOGS_LABELS:
-            return self._fail(
-                "kind 只能填 console（浏览器控制台消息）或 network（网络请求），"
-                f"收到的是 {kind!r}。"
-            )
-
-        cursor = _coerce_since(since)
-        label = LOGS_LABELS[kind_norm]
-        key = self._key(event)
-        try:
-            if kind_norm == "console":
-                log = await self.service.read_console(key, since=cursor)
-            else:
-                log = await self.service.read_network(key, since=cursor)
-        except BskError as exc:
-            return self._fail(f"读取{label}失败：{exc.friendly}{exc.format_diagnostic()}")
-        except Exception as exc:  # noqa: BLE001
-            astrbot_logger.exception("[bsk_browser] bsk_logs 未预期错误")
-            return self._fail(f"读取{label}时出现未预期的错误：{exc}")
-
-        next_cursor = _next_since(cursor, log)
-        if not log.entries:
-            # 空结果必须给一句明确的中文说明：空白字符串或 {} 会让模型以为
-            # 工具坏了，甚至去编造内容。这里连"下次传什么"一起说清楚。
-            return (
-                f"从第 {cursor} 条之后到现在，这段时间内没有捕获到{label}。\n"
-                "常见原因：页面本来就没输出、还没有新动作发生，或者浏览器会话"
-                "是刚重建的（重建后日志会从头开始）。\n"
-                f"可以保持 since={next_cursor} 再查一次，或先做点页面操作再看。"
-            )
-
-        body = self.service.render_console(log, limit=LOGS_RENDER_LIMIT)
-        shown = min(len(log.entries), LOGS_RENDER_LIMIT)
-        hidden = len(log.entries) - shown
-        lines = [
-            f"{label}（本次返回 {len(log.entries)} 条，展示 {shown} 条）：",
-            body,
-        ]
-        if hidden > 0:
-            lines.append(
-                f"（还有 {hidden} 条这次没展示，把 since 设成下面这个值再读一次"
-                "就能接着看。）"
-            )
-        lines.append(
-            f"下次只看新增的{label}，请传 since={next_cursor}"
-            f"（只返回序号大于 {next_cursor} 的日志；传 0 则从头读）。"
-        )
-        return "\n".join(lines)

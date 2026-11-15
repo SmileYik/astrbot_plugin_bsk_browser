@@ -58,30 +58,24 @@ class TestToolLogging(unittest.IsolatedAsyncioTestCase):
         self.assertIn("耗时:", finish_log)
         self.assertIn("状态: 成功", finish_log)
 
-    async def test_legacy_tool_logs_start_and_finish(self) -> None:
-        """测试旧版工具（如 bsk_open）调用起止成对记录。"""
-        nav = MagicMock(final_url="https://example.com")
-        obs = PageObservation(text="x" * 100, title="Example")
-        self.plugin.service.open_page = AsyncMock(return_value=(nav, obs))
-        self.plugin.service.render_page = MagicMock(return_value="page content " + "p" * 100)
+    async def test_status_tool_logs_start_and_finish(self) -> None:
+        """测试独立扩展工具（bsk_status）调用起止成对记录。"""
+        self.plugin.service.status = AsyncMock(return_value={"bsk_resolved": "/usr/bin/bsk", "error": ""})
 
         with patch.object(main_mod, "astrbot_logger", self.logger):
-            res = await self.plugin.bsk_open(self.event, url="https://example.com")
+            res = await self.plugin.bsk_status(self.event)
 
-        self.assertIn("已打开：https://example.com", res)
+        self.assertIn("bsk 可执行文件", res)
         debug_logs = [r for r in self.logger.records if r.level == "debug"]
         self.assertGreaterEqual(len(debug_logs), 2)
 
         start_log = debug_logs[0].render()
         self.assertIn("[工具调用开始]", start_log)
-        self.assertIn("工具: bsk_open", start_log)
-        self.assertIn("https://example.com", start_log)
+        self.assertIn("工具: bsk_status", start_log)
 
         finish_log = debug_logs[1].render()
         self.assertIn("[工具调用结束]", finish_log)
-        self.assertIn("工具: bsk_open", finish_log)
-        # 截断生效
-        self.assertIn("[已截断", finish_log)
+        self.assertIn("工具: bsk_status", finish_log)
 
     async def test_async_generator_tool_logs_start_and_finish(self) -> None:
         """测试异步生成器工具（bsk_inspect screenshot）的起止记录与 yield 透传。"""
