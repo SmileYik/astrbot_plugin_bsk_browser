@@ -229,8 +229,46 @@ class BskService:
         )
         self._session_observations: dict[str, str] = {}
         self._session_known_tabs: dict[str, set[int]] = {}
+        self._active_urls: dict[str, str] = {}
+        self._dirty_urls: set[str] = set()
+
+    def set_active_url(self, key: str, url: str) -> None:
+        """设置会话当前活动的真实 URL 并清空脏标记。"""
+        session_key = self._resolve_key(key)
+        self._active_urls[session_key] = str(url or "").strip()
+        self._dirty_urls.discard(session_key)
+
+    def mark_url_dirty(self, key: str) -> None:
+        """标记会话的活动 URL 可能已发生改变（如执行了点击、按键或后退等操作）。"""
+        session_key = self._resolve_key(key)
+        self._dirty_urls.add(session_key)
+
+    async def get_active_url(self, key: str) -> str:
+        """获取会话当前活动标签页的真实 URL（若为脏状态则自动查 tab list 刷新）。"""
+        session_key = self._resolve_key(key)
+        if session_key in self._dirty_urls or session_key not in self._active_urls:
+            try:
+                tabs = await self.tab_list(key)
+                for t in tabs:
+                    if t.get("active") and t.get("url"):
+                        self._active_urls[session_key] = t["url"]
+                        self._dirty_urls.discard(session_key)
+                        return t["url"]
+                if tabs and tabs[0].get("url"):
+                    self._active_urls[session_key] = tabs[0]["url"]
+                    self._dirty_urls.discard(session_key)
+                    return tabs[0]["url"]
+            except Exception:
+                pass
+        return self._active_urls.get(session_key, "")
 
     def __getattr__(self, name: str) -> Any:
+        if name == "_active_urls":
+            self._active_urls = {}
+            return self._active_urls
+        if name == "_dirty_urls":
+            self._dirty_urls = set()
+            return self._dirty_urls
         if name == "_session_known_tabs":
             self._session_known_tabs = {}
             return self._session_known_tabs
@@ -238,6 +276,7 @@ class BskService:
             self._session_observations = {}
             return self._session_observations
         raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
+
 
     def _make_journal(self) -> SessionJournal:
         """按配置构造 journal；没配就用插件数据目录下的默认位置。
@@ -621,8 +660,11 @@ class BskService:
                 raise
         nav = NavigateResult.from_json(nav_result.data)
         self._session_observations.pop(session_key, None)
+        final_target = nav.final_url or nav.url or url
+        self.set_active_url(session_key, final_target)
 
         observation = await self.observe(session_key)
+
         if observation.tab_id:
             self._session_known_tabs.setdefault(session_key, set()).add(observation.tab_id)
         return nav, observation
@@ -2170,12 +2212,15 @@ class BskService:
 
         parsed = NavigateResult.from_json(nav.data)
         self._session_observations.pop(session_key, None)
+        final_nav = parsed.final_url or parsed.url or url
+        self.set_active_url(session_key, final_nav)
         return {
             "session": self._session_field(session_key),
             "url": parsed.url or url,
-            "final_url": parsed.final_url or parsed.url or url,
+            "final_url": final_nav,
             "reached": parsed.reached,
         }
+
 
     async def history(
         self,
@@ -2840,6 +2885,8 @@ class BskService:
 
         if action in ("click", "fill", "press", "select", "drag", "upload"):
             self._session_observations.pop(session_key, None)
+            self.mark_url_dirty(session_key)
+
 
         out: dict[str, Any] = {
             "session": self._session_field(session_key),
@@ -2910,7 +2957,14 @@ class BskService:
         except Exception as exc:  # noqa: BLE001
             self._logger.warning("自动切换至新标签页 %s 失败：%r", new_tab_id, exc)
 
+        tab_url = str(target_tab.get("url") or "")
+        if tab_url:
+            self.set_active_url(session_key, tab_url)
+        else:
+            self.mark_url_dirty(session_key)
+
         return {
+
             "new_tab_id": new_tab_id,
             "title": str(target_tab.get("title") or ""),
             "url": str(target_tab.get("url") or ""),
