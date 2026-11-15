@@ -483,6 +483,30 @@ class BskCli:
     # 系统与诊断 (System Commands)
     # =========================================================================
 
+    async def list_browsers(
+        self,
+        *,
+        json: bool = True,
+        timeout: float = 5.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """列出已连接的浏览器实例列表。
+
+        Args:
+            json: 是否输出 JSON 格式（默认 True）。
+            timeout: 超时时间（秒，默认 5.0）。
+            raise_on_error: 失败时是否抛出异常（默认 False）。
+
+        Returns:
+            BskResult 包含浏览器实例列表的执行结果。
+        """
+        params = ["browsers"]
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
     async def get_version(
         self,
         *,

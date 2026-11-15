@@ -110,8 +110,8 @@ def test_cli_session_methods():
         cli = BskCli(runner)
         await cli.list_sessions()
         runner.run.assert_any_await(["session", "list", "--json"], timeout=10.0)
-        await cli.stop_session("sess1")
-        runner.run.assert_any_await(["session", "stop", "sess1"], timeout=15.0)
+        await cli.stop_session("sess1", json=True)
+        runner.run.assert_any_await(["session", "stop", "sess1", "--json"], timeout=15.0)
     asyncio.run(_test())
 
 
@@ -179,4 +179,22 @@ def test_runner_has_cli_instance():
     runner = BskRunner(bsk_path="bsk")
     assert hasattr(runner, "cli")
     assert isinstance(runner.cli, BskCli)
+
+
+def test_service_uses_cli():
+    async def _test():
+        from bsk.service import BskService
+        runner = MagicMock()
+        mock_res = _mock_result(data={"daemon_version": "0.5.0"})
+        runner.run = AsyncMock(return_value=mock_res)
+        runner.run_or_raise = AsyncMock(return_value=mock_res)
+        service = BskService(settings=MagicMock(), runner=runner, logger=MagicMock())
+        assert hasattr(service, "cli")
+        assert isinstance(service.cli, BskCli)
+
+        status_info = await service.status("default")
+        assert status_info.get("daemon", {}).get("version") == "0.5.0"
+        runner.run_or_raise.assert_any_await(["status", "--json"], timeout=5.0)
+    asyncio.run(_test())
+
 

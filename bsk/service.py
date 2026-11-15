@@ -215,6 +215,13 @@ class BskService:
             logger=self._logger,
             max_log_len=getattr(settings, "log_max_output_length", 2048),
         )
+        from .cli import BskCli
+
+        cli = getattr(self.runner, "cli", None)
+        if not isinstance(cli, BskCli):
+            self.cli = BskCli(self.runner)
+        else:
+            self.cli = cli
         # journal 是"尽力而为"的辅助机制：解析默认位置时会试着建一次数据目录
         # （判定"能不能用"的唯一可靠办法），但失败就降级到临时目录，
         # 绝不抛异常、也绝不影响插件加载。真正的读写发生在建/停会话和
@@ -469,8 +476,8 @@ class BskService:
 
         用于：配置校验、错误提示里告诉用户有哪些可选实例。
         """
-        result = await self.runner.run_or_raise(
-            ["browsers", "--json"], timeout=self._timeout(TIMEOUT_QUICK)
+        result = await self.cli.list_browsers(
+            timeout=self._timeout(TIMEOUT_QUICK), raise_on_error=True
         )
         raw = result.data
         if not isinstance(raw, list):
@@ -1295,8 +1302,8 @@ class BskService:
             return info
 
         try:
-            result = await self.runner.run_or_raise(
-                ["status", "--json"], timeout=self._timeout(TIMEOUT_QUICK)
+            result = await self.cli.get_status(
+                timeout=self._timeout(TIMEOUT_QUICK), raise_on_error=True
             )
             data = result.data if isinstance(result.data, dict) else {}
             info["daemon"] = {
@@ -3237,7 +3244,16 @@ class BskService:
 
         close_extra_args: list[str] = []
         if action == "close" and target_tab_id is not None:
-            # 执行 tab close 时，带上该标签页的同步凭据以规避 observation_required
+            # 执行 tab close 时，先尝试 select 聚焦，再带上该标签页的同步凭据以规避 observation_required 与 observation_changed
+            try:
+                await self.sessions.execute(
+                    session_key,
+                    lambda sid: ["tab", "select", str(int(target_tab_id)), "--session", sid, "--json"],
+                    timeout=self._timeout(TIMEOUT_FAST),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
             try:
                 obs_res = await self.sync_session(session_key, tab_id=int(target_tab_id))
                 ctx_id = getattr(obs_res, "context_id", None)
