@@ -215,6 +215,9 @@ class PageObservation:
     模型只知道"内容被截断了"，却无从续读。
     """
 
+    observation_id: str = ""
+    """bsk 协同控制中的严格页面观察令牌（来自 sync/open/observe 响应）。"""
+
     @classmethod
     def from_json(cls, raw: Any) -> PageObservation:
         """从 ``observe --json`` 或 ``sync --json`` 的输出构造（``text`` 的解析在 pages.py 里做）。"""
@@ -223,12 +226,18 @@ class PageObservation:
         text = _as_str(raw.get("text") or raw.get("vom"))
         if not text and isinstance(raw.get("observation"), dict):
             text = _as_str(raw["observation"].get("text"))
+        observation_id = _as_str(
+            raw.get("observation_id")
+            or raw.get("obs")
+            or (raw.get("observation", {}) if isinstance(raw.get("observation"), dict) else {}).get("observation_id")
+        )
         return cls(
             text=text,
             ref_count=_as_int(raw.get("ref_count")),
             tab_id=_as_int(raw.get("tab_id")),
             truncated=_as_bool(raw.get("truncated")),
             next_cursor=_as_str(raw.get("next_cursor")),
+            observation_id=observation_id,
         )
 
 
