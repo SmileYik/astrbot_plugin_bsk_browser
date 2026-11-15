@@ -223,6 +223,7 @@ class BskService:
             journal=self.journal,
             logger=self._logger,
         )
+        self._session_observations: dict[str, str] = {}
 
     def _make_journal(self) -> SessionJournal:
         """按配置构造 journal；没配就用插件数据目录下的默认位置。
@@ -575,6 +576,7 @@ class BskService:
             ``(导航结果, 页面观察)``。
         """
         session_key = self._resolve_key(key)
+        self._session_observations.pop(session_key, None)
         nav_result = await self.sessions.execute(
             session_key,
             lambda sid: ["navigate", url, "--session", sid, "--json"],
@@ -681,6 +683,11 @@ class BskService:
         observation = parse_observation(
             result.data if isinstance(result.data, dict) else {}
         )
+        if isinstance(result.data, dict):
+            obs_id = str(result.data.get("observation_id") or result.data.get("obs") or "")
+            if obs_id:
+                self._session_observations[session_key] = obs_id
+                observation.observation_id = obs_id
 
         counters_after = self.sessions.stats().get("counters", {})
         rebuilds_after = counters_after.get("not_found_rebuilds", 0)
@@ -1304,10 +1311,17 @@ class BskService:
 
     async def close_session(self, key: str) -> bool:
         """关闭当前会话。返回是否真的关了一个。"""
+        session_key = self._resolve_key(key)
+        self._session_observations.pop(session_key, None)
         return await self.sessions.release(key)
+
+    async def release_session(self, key: str) -> bool:
+        """``close_session`` 的语义别名。"""
+        return await self.close_session(key)
 
     async def shutdown(self) -> int:
         """关闭全部会话。插件 ``terminate()`` 调用。"""
+        self._session_observations.clear()
         return await self.sessions.release_all()
 
     async def recover_orphans(self) -> int:
@@ -1736,6 +1750,7 @@ class BskService:
             raise self._no_current_session_error("停止")
 
         session_id = self._owned().get(target, "")
+        self._session_observations.pop(self._resolve_key(target), None)
         stopped = await self.sessions.release(target)
 
         # 台账要跟着走：不管 stop 成不成功，本地都**不再**持有这个会话
@@ -1894,6 +1909,11 @@ class BskService:
         observation = parse_observation(
             result.data if isinstance(result.data, dict) else {}
         )
+        if isinstance(result.data, dict):
+            obs_id = str(result.data.get("observation_id") or result.data.get("obs") or "")
+            if obs_id:
+                self._session_observations[session_key] = obs_id
+                observation.observation_id = obs_id
 
         counters_after = stats_fn().get("counters", {}) if callable(stats_fn) else {}
         rebuilds_after = counters_after.get("not_found_rebuilds", 0) if isinstance(counters_after, dict) else 0
@@ -1938,9 +1958,15 @@ class BskService:
             timeout=timeout,
             allow_uncertain=False,
         )
-        return parse_observation(
+        observation = parse_observation(
             result.data if isinstance(result.data, dict) else {}
         )
+        if isinstance(result.data, dict):
+            obs_id = str(result.data.get("observation_id") or result.data.get("obs") or "")
+            if obs_id:
+                self._session_observations[session_key] = obs_id
+                observation.observation_id = obs_id
+        return observation
 
     # ------------------------------------------------------------------
     # 会话解析：session 参数 → 实际要操作的 key
@@ -2118,6 +2144,7 @@ class BskService:
             allow_uncertain=False,
         )
         parsed = NavigateResult.from_json(nav.data)
+        self._session_observations.pop(session_key, None)
         return {
             "session": self._session_field(session_key),
             "url": parsed.url or url,
@@ -2164,6 +2191,7 @@ class BskService:
             allow_uncertain=False,
         )
         parsed = NavigateResult.from_json(result.data)
+        self._session_observations.pop(session_key, None)
         return {
             "session": self._session_field(session_key),
             "direction": direction,
@@ -2204,6 +2232,7 @@ class BskService:
             allow_uncertain=False,
         )
         parsed = NavigateResult.from_json(result.data)
+        self._session_observations.pop(session_key, None)
         return {
             "session": self._session_field(session_key),
             "hard": bool(hard),
@@ -2248,6 +2277,7 @@ class BskService:
             allow_uncertain=True,
         )
         parsed = NavigateResult.from_json(result.data)
+        self._session_observations.pop(session_key, None)
         return {
             "session": self._session_field(session_key),
             "final_url": parsed.final_url or parsed.url,
