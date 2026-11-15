@@ -861,6 +861,727 @@ class BskCli:
             params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
         )
 
+    # =========================================================================
+    # 交互动作 (Interaction Commands)
+    # =========================================================================
+
+    async def click(
+        self,
+        session: str,
+        target: str,
+        *,
+        button: str | None = None,
+        click_count: int | None = None,
+        modifiers: list[str] | None = None,
+        capture_id: str | None = None,
+        image_x: int | None = None,
+        image_y: int | None = None,
+        timeout_ms: int | None = None,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 30.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """点击指定的元素或坐标。"""
+        params = ["click", str(target)]
+        if button:
+            params.extend(["--button", str(button)])
+        if click_count is not None:
+            params.extend(["--click-count", str(int(click_count))])
+        if modifiers:
+            params.extend(["--modifiers", ",".join(str(m) for m in modifiers)])
+        if capture_id:
+            params.extend(["--capture", str(capture_id)])
+        if image_x is not None:
+            params.extend(["--image-x", str(int(image_x))])
+        if image_y is not None:
+            params.extend(["--image-y", str(int(image_y))])
+        if timeout_ms is not None:
+            params.extend(["--timeout", format_duration(timeout_ms)])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def hover(
+        self,
+        session: str,
+        target: str,
+        *,
+        modifiers: list[str] | None = None,
+        settle_ms: int | None = None,
+        timeout_ms: int | None = None,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 30.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """悬停在指定的元素上。"""
+        params = ["hover", str(target)]
+        if modifiers:
+            params.extend(["--modifiers", ",".join(str(m) for m in modifiers)])
+        if settle_ms is not None:
+            params.extend(["--settle", format_duration(settle_ms)])
+        if timeout_ms is not None:
+            params.extend(["--timeout", format_duration(timeout_ms)])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def scroll_to(
+        self,
+        session: str,
+        target: str,
+        *,
+        timeout_ms: int | None = None,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 30.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """将指定元素滚动至当前视口。"""
+        params = ["scroll-to", str(target)]
+        if timeout_ms is not None:
+            params.extend(["--timeout", format_duration(timeout_ms)])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def focus(
+        self,
+        session: str,
+        target: str,
+        *,
+        timeout_ms: int | None = None,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 30.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """聚焦指定的元素。"""
+        params = ["focus", str(target)]
+        if timeout_ms is not None:
+            params.extend(["--timeout", format_duration(timeout_ms)])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def blur(
+        self,
+        session: str,
+        target: str,
+        *,
+        timeout_ms: int | None = None,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 30.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """取消指定元素的焦点。"""
+        params = ["blur", str(target)]
+        if timeout_ms is not None:
+            params.extend(["--timeout", format_duration(timeout_ms)])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def fill(
+        self,
+        session: str,
+        target: str,
+        value: str,
+        *,
+        no_clear: bool = False,
+        timeout_ms: int | None = None,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 30.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """填充文本输入框、多行文本或可编辑元素。"""
+        params = ["fill", str(target), "--value", str(value)]
+        if no_clear:
+            params.append("--no-clear")
+        if timeout_ms is not None:
+            params.extend(["--timeout", format_duration(timeout_ms)])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def press(
+        self,
+        session: str,
+        key: str,
+        *,
+        target: str | None = None,
+        modifiers: list[str] | None = None,
+        observation_id: str | None = None,
+        hold_ms: int | None = None,
+        timeout_ms: int | None = None,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 30.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """发送按键或按键组合。"""
+        params = ["press", str(key)]
+        if target:
+            params.extend(["--ref", str(target)])
+        if modifiers:
+            params.extend(["--modifiers", ",".join(str(m) for m in modifiers)])
+        if observation_id:
+            params.extend(["--observation", str(observation_id)])
+        if hold_ms is not None:
+            params.extend(["--hold-ms", format_duration(hold_ms)])
+        if timeout_ms is not None:
+            params.extend(["--timeout", format_duration(timeout_ms)])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def select(
+        self,
+        session: str,
+        target: str,
+        values: list[str] | str,
+        *,
+        timeout_ms: int | None = None,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 30.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """设置 select 下拉框的一个或多个选项值。"""
+        params = ["select", str(target)]
+        v_list = values if isinstance(values, (list, tuple)) else [values]
+        for v in v_list:
+            params.extend(["--value", str(v)])
+        if timeout_ms is not None:
+            params.extend(["--timeout", format_duration(timeout_ms)])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def wheel(
+        self,
+        session: str,
+        *,
+        delta_x: int = 0,
+        delta_y: int = 0,
+        target: str | None = None,
+        modifiers: list[str] | None = None,
+        observation_id: str | None = None,
+        timeout_ms: int | None = None,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 30.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """触发鼠标滚轮事件。"""
+        params = ["wheel"]
+        if target:
+            params.append(str(target))
+        params.extend(["--delta-x", str(int(delta_x)), "--delta-y", str(int(delta_y))])
+        if modifiers:
+            params.extend(["--modifiers", ",".join(str(m) for m in modifiers)])
+        if observation_id:
+            params.extend(["--observation", str(observation_id)])
+        if timeout_ms is not None:
+            params.extend(["--timeout", format_duration(timeout_ms)])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def drag(
+        self,
+        session: str,
+        target: str,
+        *,
+        to_ref: str | None = None,
+        to_selector: str | None = None,
+        offset_x: int | None = None,
+        offset_y: int | None = None,
+        timeout_ms: int | None = None,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 30.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """拖拽元素到目标元素或相对偏移位置。"""
+        params = ["drag", str(target)]
+        if to_ref:
+            params.extend(["--to-ref", str(to_ref)])
+        if to_selector:
+            params.extend(["--to-selector", str(to_selector)])
+        if offset_x is not None:
+            params.extend(["--offset-x", str(int(offset_x))])
+        if offset_y is not None:
+            params.extend(["--offset-y", str(int(offset_y))])
+        if timeout_ms is not None:
+            params.extend(["--timeout", format_duration(timeout_ms)])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def upload(
+        self,
+        session: str,
+        target: str,
+        files: list[str] | str,
+        *,
+        timeout_ms: int | None = None,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 30.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """通过文件选择框上传一个或多个文件。"""
+        params = ["upload", str(target)]
+        f_list = files if isinstance(files, (list, tuple)) else [files]
+        for f in f_list:
+            params.extend(["--file", str(f)])
+        if timeout_ms is not None:
+            params.extend(["--timeout", format_duration(timeout_ms)])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def download(
+        self,
+        session: str,
+        out_path: str,
+        *,
+        timeout_ms: int | None = None,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 60.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """捕获下载并保存到指定路径。"""
+        params = ["download", str(out_path)]
+        if timeout_ms is not None:
+            params.extend(["--timeout", format_duration(timeout_ms)])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def wait_for_element(
+        self,
+        session: str,
+        target: str,
+        *,
+        state: str = "visible",
+        timeout_ms: int = 30000,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 35.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """等待元素达到指定状态 (visible/hidden/attached/detached)。"""
+        params = ["wait-for-element", str(target), "--state", str(state)]
+        if timeout_ms is not None:
+            params.extend(["--timeout", format_duration(timeout_ms)])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def wait_ms(
+        self,
+        session: str,
+        duration_ms: int,
+        *,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 35.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """在守护进程端等待指定时间。"""
+        params = ["wait-ms", format_duration(duration_ms)]
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def interact(
+        self,
+        session: str,
+        action: str,
+        *,
+        target: str = "",
+        tab_id: int | None = None,
+        timeout: float = 30.0,
+        raise_on_error: bool = False,
+        **opts: Any,
+    ) -> BskResult:
+        """动态交互动作分发入口。"""
+        normalized_action = action.replace("_", "-")
+        if normalized_action == "click":
+            return await self.click(
+                session, target, tab_id=tab_id, timeout=timeout, raise_on_error=raise_on_error,
+                button=opts.get("button"), click_count=opts.get("click_count"),
+                modifiers=opts.get("modifiers"), capture_id=opts.get("capture_id"),
+                image_x=opts.get("image_x"), image_y=opts.get("image_y"),
+                timeout_ms=opts.get("timeout_ms"),
+            )
+        if normalized_action == "hover":
+            return await self.hover(
+                session, target, tab_id=tab_id, timeout=timeout, raise_on_error=raise_on_error,
+                modifiers=opts.get("modifiers"), settle_ms=opts.get("settle_ms"),
+                timeout_ms=opts.get("timeout_ms"),
+            )
+        if normalized_action == "scroll-to":
+            return await self.scroll_to(
+                session, target, tab_id=tab_id, timeout=timeout, raise_on_error=raise_on_error,
+                timeout_ms=opts.get("timeout_ms"),
+            )
+        if normalized_action == "focus":
+            return await self.focus(
+                session, target, tab_id=tab_id, timeout=timeout, raise_on_error=raise_on_error,
+                timeout_ms=opts.get("timeout_ms"),
+            )
+        if normalized_action == "blur":
+            return await self.blur(
+                session, target, tab_id=tab_id, timeout=timeout, raise_on_error=raise_on_error,
+                timeout_ms=opts.get("timeout_ms"),
+            )
+        if normalized_action == "fill":
+            return await self.fill(
+                session, target, str(opts.get("value", "")), tab_id=tab_id, timeout=timeout,
+                raise_on_error=raise_on_error, no_clear=bool(opts.get("no_clear", False)),
+                timeout_ms=opts.get("timeout_ms"),
+            )
+        if normalized_action == "press":
+            key = str(opts.get("key") or opts.get("press_key") or "")
+            return await self.press(
+                session, key, target=target or None, tab_id=tab_id, timeout=timeout,
+                raise_on_error=raise_on_error, modifiers=opts.get("modifiers"),
+                observation_id=opts.get("observation_id"), hold_ms=opts.get("hold_ms"),
+                timeout_ms=opts.get("timeout_ms"),
+            )
+        if normalized_action == "select":
+            vals = opts.get("values") or ([opts["value"]] if "value" in opts else [])
+            return await self.select(
+                session, target, vals, tab_id=tab_id, timeout=timeout,
+                raise_on_error=raise_on_error, timeout_ms=opts.get("timeout_ms"),
+            )
+        if normalized_action == "wheel":
+            return await self.wheel(
+                session, delta_x=int(opts.get("delta_x", 0)), delta_y=int(opts.get("delta_y", 0)),
+                target=target or None, modifiers=opts.get("modifiers"),
+                observation_id=opts.get("observation_id"), timeout_ms=opts.get("timeout_ms"),
+                tab_id=tab_id, timeout=timeout, raise_on_error=raise_on_error,
+            )
+        if normalized_action == "drag":
+            return await self.drag(
+                session, target, to_ref=opts.get("to_ref"), to_selector=opts.get("to_selector"),
+                offset_x=opts.get("offset_x"), offset_y=opts.get("offset_y"),
+                timeout_ms=opts.get("timeout_ms"), tab_id=tab_id, timeout=timeout,
+                raise_on_error=raise_on_error,
+            )
+        if normalized_action == "upload":
+            files = opts.get("files") or ([opts["file"]] if "file" in opts else [])
+            return await self.upload(
+                session, target, files, timeout_ms=opts.get("timeout_ms"),
+                tab_id=tab_id, timeout=timeout, raise_on_error=raise_on_error,
+            )
+        if normalized_action == "download":
+            return await self.download(
+                session, str(opts.get("out") or opts.get("out_path") or ""),
+                timeout_ms=opts.get("timeout_ms"), tab_id=tab_id, timeout=timeout,
+                raise_on_error=raise_on_error,
+            )
+        if normalized_action == "wait-for-element":
+            return await self.wait_for_element(
+                session, target, state=str(opts.get("state", "visible")),
+                timeout_ms=int(opts.get("timeout_ms", 30000)), tab_id=tab_id,
+                timeout=timeout, raise_on_error=raise_on_error,
+            )
+        if normalized_action == "wait-ms":
+            return await self.wait_ms(
+                session, int(opts.get("duration_ms", 0)), tab_id=tab_id,
+                timeout=timeout, raise_on_error=raise_on_error,
+            )
+        from .errors import BskError
+        raise BskError(f"不支持的交互动作: {action}", code="unsupported_action")
+
+    # =========================================================================
+    # 日志与诊断 (Console & Diagnostic Commands)
+    # =========================================================================
+
+    async def read_console(
+        self,
+        session: str,
+        *,
+        since: int = 0,
+        limit: int | None = None,
+        max_text_chars: int | None = None,
+        include_stack: bool = False,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 5.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """读取控制台日志缓冲。"""
+        params = ["console", "--since", str(int(since))]
+        if limit is not None:
+            params.extend(["--limit", str(int(limit))])
+        if max_text_chars is not None:
+            params.extend(["--max-text-chars", str(int(max_text_chars))])
+        if include_stack:
+            params.append("--include-stack")
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def read_network(
+        self,
+        session: str,
+        *,
+        since: int = 0,
+        limit: int | None = None,
+        max_text_chars: int | None = None,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 5.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """读取网络活动日志缓冲。"""
+        params = ["network", "--since", str(int(since))]
+        if limit is not None:
+            params.extend(["--limit", str(int(limit))])
+        if max_text_chars is not None:
+            params.extend(["--max-text-chars", str(int(max_text_chars))])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def debug(
+        self,
+        session: str,
+        debug_action: str,
+        *,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 10.0,
+        raise_on_error: bool = False,
+        **extra_args: Any,
+    ) -> BskResult:
+        """执行页面调试命令。"""
+        params = ["debug", str(debug_action)]
+        for k, v in extra_args.items():
+            flag = f"--{k.replace('_', '-')}"
+            if v is True:
+                params.append(flag)
+            elif v is not False and v is not None:
+                params.extend([flag, str(v)])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    # =========================================================================
+    # 视口、截图与环境 (Viewport & Screenshot Commands)
+    # =========================================================================
+
+    async def screenshot(
+        self,
+        session: str,
+        *,
+        out: str | None = None,
+        full_page: bool = False,
+        ref: str | None = None,
+        selector: str | None = None,
+        format: str | None = None,
+        quality: int | None = None,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 30.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """页面截图。"""
+        params = ["screenshot"]
+        if out:
+            params.extend(["--out", str(out)])
+        if full_page:
+            params.append("--full-page")
+        if ref:
+            params.extend(["--ref", str(ref)])
+        if selector:
+            params.extend(["--selector", str(selector)])
+        if format:
+            params.extend(["--format", str(format)])
+        if quality is not None:
+            params.extend(["--quality", str(int(quality))])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def emulate(
+        self,
+        session: str,
+        *,
+        device: str | None = None,
+        width: int | None = None,
+        height: int | None = None,
+        user_agent: str | None = None,
+        touch: bool | None = None,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 10.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """模拟移动设备视口或环境。"""
+        params = ["emulate"]
+        if device:
+            params.extend(["--device", str(device)])
+        if width is not None:
+            params.extend(["--width", str(int(width))])
+        if height is not None:
+            params.extend(["--height", str(int(height))])
+        if user_agent:
+            params.extend(["--user-agent", str(user_agent)])
+        if touch is True:
+            params.append("--touch")
+        elif touch is False:
+            params.append("--no-touch")
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def resize_window(
+        self,
+        session: str,
+        width: int,
+        height: int,
+        *,
+        json: bool = True,
+        timeout: float = 10.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """调整 Agent Window 窗口尺寸。"""
+        params = ["window", "resize", "--width", str(int(width)), "--height", str(int(height)), "--session", str(session)]
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
+    async def request_help(
+        self,
+        session: str,
+        message: str,
+        *,
+        timeout_sec: int | None = None,
+        tab_id: int | None = None,
+        json: bool = True,
+        timeout: float = 60.0,
+        raise_on_error: bool = False,
+    ) -> BskResult:
+        """向人类请求交互协助。"""
+        params = ["request-help", str(message)]
+        if timeout_sec is not None:
+            params.extend(["--timeout", f"{int(timeout_sec)}s"])
+        if tab_id is not None:
+            params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
+        if json:
+            params.append("--json")
+        return await self._execute(
+            params, timeout=timeout, raise_on_error=raise_on_error, expect_json=json
+        )
+
 
 def format_duration(milliseconds: int | float) -> str:
     """把毫秒数转成 bsk 接受的 duration 字符串（例如 1000 -> '1s'）。"""
