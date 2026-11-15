@@ -564,8 +564,8 @@ async def bsk_session(self, event: AstrMessageEvent, **kwargs):
 | SSE 实时观察 / 侧边栏 UI / 缩略图 | 有 | **无** | 展示层能力。AstrBot 没有 DSH 的 `webServer` 路由 seam 与客户端插件体系，无承载之处 |
 | `lazyTools`（大工具按需注册） | 有（skill 调用后注册） | **支持**（模型调用 `bsk_load_tools` 后加载 `bsk_debug`） | 触发方式不同：DSH 靠 skill 触发，本插件靠一个常驻的小工具触发；本插件改的是**当轮** `ProviderRequest.func_tool`，同一轮的下一次请求就生效，不必等下一步操作（§5 D11）。它替换掉了早先"只能在插件加载期开关"的权宜方案 |
 | `bsk_evaluate` | **不暴露** | **保留**（独立开关 + 强制管理员） | 本插件**超出** DSH 的部分。这是 0.1.x 的既有功能，且风险已由 `enable_evaluate` + `evaluate_require_admin` 两道独立闸单独门控（§5 D7）。移除它等于回退既有能力 |
-| `bsk_screenshot` 的 `full_page` | 未暴露 | **保留** | 同上，既有功能，且严格更强（能截整个长页面）。注意新工具的 `screenshot` 是 DSH 语义，没有整页能力 |
-| 新 `screenshot` 是否把图片发给用户 | 会发 | **不发**（只回文字） | 新 handler 返回 `str`，不是 async generator，拿不到 `yield event.image_result(...)` 那条路。这是本次改造里**唯一的功能回退点**，因此旧工具 `bsk_screenshot` 必须保留 |
+| `bsk_screenshot` 的 `full_page` | 未暴露 | **支持** | 既有功能，在新工具 `bsk_inspect(action="screenshot", full_page=True)` 中也已原生支持（能截整个长页面） |
+| 新 `screenshot` 是否把图片发给用户 | 会发 | **会发** | 新工具 `bsk_inspect` 改为 async generator，当 `action="screenshot"` 时先后 yield `event.image_result(path)` 与文字描述，图片直接发给用户；旧工具 `bsk_screenshot` 作为兼容保留 |
 
 **反向说明（本插件比 DSH 弱、且短期内不打算补的）**：上面第 3 行属于功能性缺口；
 第 4 行属于展示层缺口，**不影响工具功能的等价性**。

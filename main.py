@@ -1632,31 +1632,17 @@ class BskBrowserPlugin(Star):
         return frozenset(supported)
 
     async def _run_screenshot(self, key: str, args: dict) -> str:
-        """``bsk_inspect(action="screenshot")``：截图并回一段文字描述。
-
-        ⚠️ 与旧工具 ``bsk_screenshot`` 的**唯一行为差异**，必须说清楚：
-        这里的 handler 返回 ``str``（schema 覆写后框架按普通函数调用它），
-        **不是** async generator，所以拿不到 ``yield event.image_result(...)``
-        那条路 —— 新工具不会把图片发给用户，只回一段描述文字。
-
-        这是本次改造里唯一的功能回退点，已在交付报告里如实列出。
-        要真的把图片发出去，目前只能用兼容保留的 ``bsk_screenshot``
-        （它还能整页截图，新工具也没有这个能力）。
-        """
+        """``bsk_inspect(action="screenshot")`` 的回执生成逻辑。"""
         payload = await self.service.screenshot_ex(
             key,
+            full_page=bool(args.get("full_page", False)),
             ref=args.get("ref", ""),
             tab_id=args.get("tab_id"),
         )
         message = payload.for_llm
         if payload.warning:
             message = f"{message}\n注意：{payload.warning}"
-        return (
-            f"{message}\n"
-            "（说明：新工具只返回这段文字描述，不会把图片作为消息发出去；"
-            f"截图文件在 {payload.path}。"
-            "需要把图片直接发给用户时，请改用 bsk_screenshot。）"
-        )
+        return message
 
     async def _run_logs(
         self, key: str, kind: str, args: dict, *, include_stack: bool
@@ -1995,10 +1981,55 @@ class BskBrowserPlugin(Star):
         读页面优先用 observe（最常用，大页面自适应输出结构大纲；支持 query 关键词快速定位元素、
         offset/limit 范围切片浏览，及 view 切换 outline/elements/text 视图）；
         snapshot 是无游标的静态可达性树；html 取原始 HTML（有字节上限）；
-        screenshot 只回文字描述、不会把图片发给用户；console / network 支持
-        since 游标增量读。要抓包、控制流量改用 bsk_debug。
+        screenshot 截图并直接把图片发给用户（支持 full_page=True 截取长页面）；
+        console / network 支持 since 游标增量读。要抓包、控制流量改用 bsk_debug。
         """
-        return await self._dispatch("bsk_inspect", event, kwargs)
+        denied = self._denied(event)
+        if denied:
+            yield self._fail(denied)
+            return
+
+        peek = tools_mod.normalize_args(kwargs)
+        action = peek.get("action")
+
+        if action == "screenshot":
+            try:
+                args = tools_mod.validate("bsk_inspect", peek)
+            except BskToolError as exc:
+                yield self._fail(str(exc))
+                return
+
+            key = str(args.get("session") or "").strip() or self._key(event)
+            try:
+                payload = await self.service.screenshot_ex(
+                    key,
+                    full_page=bool(args.get("full_page", False)),
+                    ref=args.get("ref", ""),
+                    tab_id=args.get("tab_id"),
+                )
+            except BskError as exc:
+                yield self._fail(f"截图失败：{exc.friendly}{exc.format_diagnostic()}")
+                return
+            except Exception as exc:  # noqa: BLE001
+                astrbot_logger.exception("[bsk_browser] bsk_inspect screenshot 未预期错误")
+                yield self._fail(f"截图时出现未预期的错误：{exc}")
+                return
+
+            message = payload.for_llm
+            if payload.warning:
+                message = f"{message}\n注意：{payload.warning}"
+
+            try:
+                yield event.image_result(payload.path)
+            except Exception as exc:  # noqa: BLE001
+                astrbot_logger.warning("[bsk_browser] 发送截图失败：%r", exc)
+                message = f"{message}\n（图片发送失败了，截图文件在：{payload.path}）"
+
+            yield message
+            return
+
+        result = await self._dispatch("bsk_inspect", event, kwargs)
+        yield result
 
     @filter.llm_tool("bsk_debug")
     @_trace_tool_call("bsk_debug")
@@ -2043,6 +2074,8 @@ class BskBrowserPlugin(Star):
         select / press。target 支持快照引用（如 @e3）或 CSS 选择器；
         fill 还要 value，select 还要 values，press 必填 key。
         scroll-to 带连字符（不是 scroll_to）。
+        滚动提示：滚动到特定元素请优先用 scroll-to（配合 target）；
+        盲滚时用 wheel（向下滚动务必传正数 delta_y 如 500，建议配合 target 指定可滚动区域）。
         操作后推荐用 bsk_inspect(action='observe') 确认结果；若页面跳转请优先调用 bsk_session(action='sync') 同步控制权。
         """
         return await self._dispatch("bsk_interact", event, kwargs)
@@ -2228,10 +2261,7 @@ class BskBrowserPlugin(Star):
     async def bsk_screenshot(self, event: AstrMessageEvent, full_page: bool = False):
         """给当前浏览器页面截图，并直接把图片发给用户。
 
-        （兼容保留，新用法请优先用 `bsk_inspect`（action="screenshot"）。
-        注意：新工具目前**只返回一段文字描述，不会把图片发给用户**；
-        要真的把图片发出去、或要整页截图（full_page），请继续用本工具
-        —— 这两件事目前只有本工具做得到。）
+        （兼容保留，新用法请优先用 `bsk_inspect`（action="screenshot", full_page=...））。
         图片会以消息形式发送，你不需要描述图片内容，除非用户要求。
 
         Args:

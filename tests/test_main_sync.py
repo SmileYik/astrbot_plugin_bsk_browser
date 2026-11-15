@@ -100,9 +100,11 @@ class TestMainSync(unittest.IsolatedAsyncioTestCase):
         self.plugin.service.observe = AsyncMock(return_value=obs)
         self.plugin.service.render_page = MagicMock(return_value="Filtered Rendered VOM")
 
-        res = await self.plugin.bsk_inspect(
+        gen = self.plugin.bsk_inspect(
             self.event, action="observe", query="gtnh", offset=10, limit=20, view="elements"
         )
+        items = [item async for item in gen]
+        res = items[-1]
         self.assertIn("Filtered Rendered VOM", res)
         self.plugin.service.render_page.assert_called_once()
         call_kwargs = self.plugin.service.render_page.call_args[1]
