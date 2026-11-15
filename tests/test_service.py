@@ -3053,5 +3053,45 @@ class TestInteractAutoScroll(unittest.IsolatedAsyncioTestCase):
         self.assertIn("测试目标", rendered)
 
 
+class TestPageAndTabLifecycleLogging(unittest.IsolatedAsyncioTestCase):
+    """测试 BskService 页面与 Tab 动作的结构化 DEBUG 日志。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory(prefix="bsk-svc-log-")
+        self.addCleanup(self.tmp.cleanup)
+
+    async def test_page_and_tab_lifecycle_logs(self) -> None:
+        from tests.test_logger_injection import RecordingLogger
+
+        rec = RecordingLogger()
+        runner = FakeRunner()
+        service = BskService(
+            make_settings(screenshot_dir=self.tmp.name),
+            runner=runner,
+            logger=rec,
+        )
+
+        await service.open_page("umo-1", "https://example.com")
+        rendered = rec.rendered()
+        self.assertIn("[页面打开]", rendered)
+
+        await service.navigate("umo-1", "https://example.org", tab_id=101)
+        rendered = rec.rendered()
+        self.assertIn("[页面导航]", rendered)
+        self.assertIn("101", rendered)
+
+        await service.tabs("umo-1", "create", url="https://newtab.com")
+        rendered = rec.rendered()
+        self.assertIn("[标签新建]", rendered)
+
+        await service.tabs("umo-1", "select", tab_id=102)
+        rendered = rec.rendered()
+        self.assertIn("[标签切换]", rendered)
+
+        await service.tabs("umo-1", "close", tab_id=102)
+        rendered = rec.rendered()
+        self.assertIn("[标签关闭]", rendered)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main(verbosity=2)

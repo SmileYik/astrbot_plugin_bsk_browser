@@ -588,6 +588,15 @@ class BskService:
             ``(导航结果, 页面观察)``。
         """
         session_key = self._resolve_key(key)
+        session_entry = self.sessions._entries.get(session_key)
+        window_id = session_entry.session.agent_window_id if session_entry else 0
+        self._logger.debug(
+            "[页面打开] 会话: %s (窗口ID=%s) | 目标URL: %s | 当前已知Tab数: %d",
+            session_key,
+            window_id,
+            url,
+            len(self._session_known_tabs.get(session_key, set())),
+        )
         self._session_observations.pop(session_key, None)
         try:
             nav_result = await self.sessions.execute(
@@ -2118,6 +2127,15 @@ class BskService:
         （TOOL-SPEC §1.2 明说），照原样回传让模型自己判断。
         """
         session_key = self._resolve_key(key)
+        session_entry = self.sessions._entries.get(session_key)
+        window_id = session_entry.session.agent_window_id if session_entry else 0
+        self._logger.debug(
+            "[页面导航] 会话: %s (窗口ID=%s) | 目标URL: %s | 指定Tab: %s",
+            session_key,
+            window_id,
+            url,
+            tab_id if tab_id is not None else "当前Tab",
+        )
         args: list[str] = []
         if wait_until and wait_until != "load":
             args += ["--wait-until", str(wait_until)]
@@ -2877,6 +2895,12 @@ class BskService:
 
         new_tab_id = target_tab["tab_id"]
         known.update(new_ids)
+        self._logger.debug(
+            "[新标签发现] 会话: %s | 点击后产生新Tab: %s，已自动切换 | 当前已知Tab总数: %d",
+            session_key,
+            new_tab_id,
+            len(current_tab_ids),
+        )
 
         # 自动切换焦点至新标签页
         try:
@@ -2905,6 +2929,14 @@ class BskService:
             return
 
         # 保留第一个标签页，将其余标签页依次关闭
+        closed_tids = [tab.get("tab_id", tab.get("id")) for tab in tab_list[1:] if isinstance(tab, dict)]
+        keeper_id = tab_list[0].get("tab_id", tab_list[0].get("id")) if isinstance(tab_list[0], dict) else None
+        self._logger.debug(
+            "[标签扫尾清理] 会话: %s | 清理多余临时Tab: %s | 保留主Tab: %s",
+            session_key,
+            closed_tids,
+            keeper_id,
+        )
         for tab in tab_list[1:]:
             if isinstance(tab, dict):
                 tid = tab.get("tab_id", tab.get("id"))
@@ -3167,7 +3199,40 @@ class BskService:
                 for name, value in data.items():
                     if isinstance(value, (str, int, float, bool)) or value is None:
                         out.setdefault(name, value)
-            if action == "close":
+            if action == "create":
+                if isinstance(data, dict):
+                    tid = data.get("tab_id", data.get("id"))
+                    if tid is not None:
+                        try:
+                            self._session_known_tabs.setdefault(session_key, set()).add(int(tid))
+                        except (ValueError, TypeError):
+                            pass
+                self._logger.debug(
+                    "[标签新建] 会话: %s | URL: %s | 当前已知Tab数: %d",
+                    session_key,
+                    opts.get("url") or "(空白)",
+                    len(self._session_known_tabs.get(session_key, set())),
+                )
+            elif action == "select":
+                self._logger.debug(
+                    "[标签切换] 会话: %s | 目标Tab: %s",
+                    session_key,
+                    target_tab_id,
+                )
+            elif action == "borrow":
+                self._logger.debug(
+                    "[标签借用] 会话: %s | 借用用户Tab: %s (超时=%ss)",
+                    session_key,
+                    target_tab_id,
+                    opts.get("timeout") or "默认",
+                )
+            elif action == "return":
+                self._logger.debug(
+                    "[标签归还] 会话: %s | 归还用户Tab: %s",
+                    session_key,
+                    target_tab_id,
+                )
+            elif action == "close":
                 if target_tab_id is not None:
                     try:
                         tid = int(target_tab_id)
@@ -3176,6 +3241,12 @@ class BskService:
                             known.discard(tid)
                     except (ValueError, TypeError):
                         pass
+                self._logger.debug(
+                    "[标签关闭] 会话: %s | 关闭Tab: %s | 剩余已知Tab数: %d",
+                    session_key,
+                    target_tab_id,
+                    len(self._session_known_tabs.get(session_key, set())),
+                )
                 self._session_observations.pop(session_key, None)
                 try:
                     rem_data = await self.tabs(session_key, "list", scope="agent")
