@@ -1163,68 +1163,9 @@ class BskService:
     ) -> ShotPayload:
         """截图并返回可交付的文件路径。
 
-        流程：分配唯一路径 → 调 bsk（``--out`` 明确指定）→ 校验魔数与大小。
-
-        Note:
-            必须自己指定 ``--out``：bsk 默认写到系统 TEMP 且文件名含时间戳，
-            我们拿不到确定的路径，也管不了清理。
-            ``--out`` 会覆盖已有文件，所以路径必须唯一。
-
-        Note:
-            两条分支的超时来源不同，不要合并：
-
-            - 全页截图（``--full-page``）用用户配置的 ``fullpage_timeout_sec``
-              （默认 :data:`TIMEOUT_FULLPAGE`，可调到 600 秒）；
-            - 视口截图走常规规则 :meth:`_timeout`：内置下限
-              :data:`TIMEOUT_SCREENSHOT`（30 秒）与 ``command_timeout_sec``
-              取较大者，默认配置下实际是 60 秒。
-
-            视口截图不需要用户单独配置：实测只要 0.12 秒，30 秒下限已有
-            250 倍余量；它跟着 ``command_timeout_sec`` 走是刻意的 ——
-            那条本来就表达"你愿意为一条命令最多等多久"，截图没有理由例外。
+        委托至 :meth:`screenshot_ex`，保持全页与视口截图逻辑的单一实现源。
         """
-        session_key = self._resolve_key(key)
-        directory = self.settings.screenshot_dir or self._default_shot_dir()
-        out_path = make_shot_path(directory, session_key)
-
-        if full_page:
-            timeout = self._timeout(self.fullpage_budget())
-        else:
-            timeout = self._timeout(TIMEOUT_SCREENSHOT)
-        argv = ["screenshot", "--out", str(out_path)]
-        if full_page:
-            argv.append("--full-page")
-
-        result = await self.sessions.execute(
-            session_key,
-            lambda sid: [*argv, "--session", sid, "--json"],
-            timeout=timeout,
-            # 截图是只读动作。
-            allow_uncertain=True,
-        )
-        shot = Screenshot.from_json(result.data)
-        if not shot.path:
-            shot.path = str(out_path)
-
-        ok, reason = verify_shot(shot)
-        warning = "" if ok else f"截图可能不完整：{reason}"
-
-        # 顺手清理旧图，避免磁盘无限增长（失败不影响主流程）。
-        try:
-            removed = cleanup_shots(directory)
-            if removed:
-                self._logger.debug("清理了 %d 张旧截图", removed)
-        except Exception as exc:  # noqa: BLE001
-            self._logger.debug("截图清理失败（忽略）：%r", exc)
-
-        return ShotPayload(
-            path=shot.path,
-            width=shot.width,
-            height=shot.height,
-            byte_size=shot.byte_size,
-            for_llm=self._describe_shot(shot, full_page),
-            warning=warning,
-        )
+        return await self.screenshot_ex(key, full_page=full_page)
 
     def _describe_shot(self, shot: Screenshot, full_page: bool) -> str:
         """给模型的截图描述。不返回图片本身，只描述它。"""
@@ -3335,6 +3276,7 @@ class BskService:
         ref: str = "",
         full_page: bool = False,
         tab_id: int | None = None,
+        observation: str | None = None,
     ) -> ShotPayload:
         """screenshot 的扩展版（多 ref）。既有的 screenshot(key, full_page=)
         保持不变并委托到本方法。
@@ -3368,15 +3310,44 @@ class BskService:
             argv += ["--ref", ref]
         if use_full_page:
             argv.append("--full-page")
+            token = str(observation or "").strip() or self._session_observations.pop(session_key, None)
+            if token:
+                argv.extend(["--observation", token])
 
-        result = await self.sessions.execute(
-            session_key,
-            lambda sid: self._with_tab_id(argv, tab_id)
-            + ["--session", sid, "--json"],
-            timeout=timeout,
-            # 截图是只读动作。
-            allow_uncertain=True,
-        )
+        async def _run_shot(current_argv: list[str]) -> Any:
+            return await self.sessions.execute(
+                session_key,
+                lambda sid: self._with_tab_id(current_argv, tab_id)
+                + ["--session", sid, "--json"],
+                timeout=timeout,
+                # 截图是只读动作（但全页滚动在底层可能受操作安全护栏保护）。
+                allow_uncertain=True,
+            )
+
+        try:
+            result = await _run_shot(argv)
+        except BskError as exc:
+            reason = getattr(exc, "reason", "")
+            effect_state = getattr(exc, "effect_state", "")
+            if (
+                use_full_page
+                and reason in ("cooperation_sync_required", "observation_required", "control_context_invalid")
+                and effect_state != "unknown"
+            ):
+                self._logger.info("全页截图遇到控制上下文或令牌需同步 (%s)，执行 sync_session 补救", reason)
+                obs = await self.sync_session(session_key, tab_id=tab_id)
+                retry_argv = ["screenshot", "--out", str(out_path)]
+                if ref:
+                    retry_argv += ["--ref", ref]
+                retry_argv.append("--full-page")
+                retry_argv.extend(["--observation", obs.observation_id])
+                self._session_observations.pop(session_key, None)
+                result = await _run_shot(retry_argv)
+            else:
+                raise
+        finally:
+            if use_full_page:
+                self._session_observations.pop(session_key, None)
         shot = Screenshot.from_json(result.data)
         if not shot.path:
             shot.path = str(out_path)
