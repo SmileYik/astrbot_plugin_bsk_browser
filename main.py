@@ -1729,6 +1729,19 @@ class BskBrowserPlugin(Star):
         result = await self.service.interact(
             key, action, tab_id=args.get("tab_id"), **opts
         )
+        if action == "click":
+            detector = getattr(self.service, "detect_new_tabs_and_switch", None)
+            if callable(detector):
+                try:
+                    res = detector(key)
+                    if inspect.isawaitable(res):
+                        res = await res
+                    if isinstance(res, dict):
+                        result["new_tab_info"] = res
+                        if res.get("new_tab_id"):
+                            result["tab_id"] = res["new_tab_id"]
+                except Exception as exc:  # noqa: BLE001
+                    self.logger.debug("点击后检测新标签页失败（忽略）：%r", exc)
         return self._render_interact(action, result)
 
     @staticmethod

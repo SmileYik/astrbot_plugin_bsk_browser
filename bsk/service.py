@@ -21,6 +21,7 @@ import json
 import math
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .config import (
@@ -226,6 +227,15 @@ class BskService:
         )
         self._session_observations: dict[str, str] = {}
         self._session_known_tabs: dict[str, set[int]] = {}
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "_session_known_tabs":
+            self._session_known_tabs = {}
+            return self._session_known_tabs
+        if name == "_session_observations":
+            self._session_observations = {}
+            return self._session_observations
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
 
     def _make_journal(self) -> SessionJournal:
         """按配置构造 journal；没配就用插件数据目录下的默认位置。
@@ -2811,21 +2821,12 @@ class BskService:
         if action in ("click", "fill", "press", "select", "drag", "upload"):
             self._session_observations.pop(session_key, None)
 
-        new_tab_info = None
-        if action == "click":
-            new_tab_info = await self.detect_new_tabs_and_switch(session_key)
-
         out: dict[str, Any] = {
             "session": self._session_field(session_key),
             "action": action,
-            "tab_id": (
-                new_tab_info["new_tab_id"]
-                if new_tab_info
-                else self._payload_tab_id(result.data)
-            ),
+            "tab_id": self._payload_tab_id(result.data),
             "auto_scrolled": auto_scrolled,
             "auto_synced": auto_synced,
-            "new_tab_info": new_tab_info,
         }
         out.update(self._interact_result(action, opts, result.data, readonly))
         return out

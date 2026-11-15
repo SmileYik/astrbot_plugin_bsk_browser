@@ -294,7 +294,7 @@ class TestIntegrationSyncSuite(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("已在后台自动执行 sync 补救重试", click_res)
 
         cmds = [c[0] for c in self.runner.calls]
-        self.assertEqual(cmds, ["sync", "click"])
+        self.assertEqual(cmds, ["sync", "click", "tab"])
 
     async def test_scenario_4_dual_auto_sync_and_auto_scroll(self) -> None:
         """场景 4：叠加自愈（同时缺少控制权与元素不在视口），先自动 sync 再自动 scroll-to 最终成功。"""
@@ -364,7 +364,7 @@ class TestIntegrationSyncSuite(unittest.IsolatedAsyncioTestCase):
         self.assertIn("目标元素原先位于视口外，已自动将其滚动至视口中心", res)
 
         cmds = [c[0] for c in self.runner.calls]
-        self.assertEqual(cmds, ["click", "sync", "click", "scroll-to", "click"])
+        self.assertEqual(cmds, ["click", "sync", "click", "scroll-to", "click", "tab"])
 
 
 if __name__ == "__main__":

@@ -133,7 +133,7 @@ class TestInteractionResilienceSuite(unittest.IsolatedAsyncioTestCase):
         )
 
         cmds = [c[0] for c in self.runner.calls]
-        self.assertEqual(cmds, ["click", "scroll-to", "click"])
+        self.assertEqual(cmds, ["click", "scroll-to", "click", "tab"])
         self.assertIn("@e27", self.runner.calls[1])
         self.assertIn("@e27", self.runner.calls[2])
 
