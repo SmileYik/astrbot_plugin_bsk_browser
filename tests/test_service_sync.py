@@ -15,10 +15,13 @@ class TestServiceSync(unittest.IsolatedAsyncioTestCase):
         service._resolve_key = MagicMock(return_value="s1")
         service._with_tab_id = lambda args, tid: args + (["--tab-id", str(tid)] if tid else [])
         service._timeout = lambda builtin: builtin
+        service.cli = MagicMock()
+        mock_res = MagicMock(data={"vom": "@vom 1\n@view 800x600\nRootWebArea \"Test\"\n@e1 button \"OK\"", "tab_id": 1})
+        service.cli.sync_tab = AsyncMock(return_value=mock_res)
         service.sessions = MagicMock()
-        service.sessions.execute = AsyncMock(
-            return_value=MagicMock(data={"vom": "@vom 1\n@view 800x600\nRootWebArea \"Test\"\n@e1 button \"OK\"", "tab_id": 1})
-        )
+        async def _mock_exec(key, action, **kwargs):
+            return await action("s1")
+        service.sessions.execute_action = AsyncMock(side_effect=_mock_exec)
 
         obs = await service.sync_session("s1", tab_id=1, wait_for="Test", timeout_ms=3000)
         self.assertIsInstance(obs, PageObservation)
@@ -26,18 +29,17 @@ class TestServiceSync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(obs.refs), 1)
         self.assertEqual(obs.refs[0].name, "OK")
 
-        service.sessions.execute.assert_called_once()
-        call_args = service.sessions.execute.call_args
-        self.assertEqual(call_args[0][0], "s1")
-        builder = call_args[0][1]
-        argv = builder("s1")
-        self.assertEqual(argv[0], "sync")
-        self.assertIn("--wait-for", argv)
-        self.assertIn("Test", argv)
-        self.assertIn("--timeout-ms", argv)
-        self.assertIn("3000", argv)
-        self.assertIn("--tab-id", argv)
-        self.assertIn("1", argv)
+        service.sessions.execute_action.assert_called_once()
+        service.cli.sync_tab.assert_awaited_once_with(
+            "s1",
+            tab_id=1,
+            wait_for="Test",
+            wait_not="",
+            timeout_ms=3000,
+            max_tokens=None,
+            timeout=8.0,
+            raise_on_error=True,
+        )
 
     async def test_open_session_calls_service_open(self) -> None:
         service = BskService.__new__(BskService)

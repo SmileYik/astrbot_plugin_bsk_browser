@@ -647,10 +647,14 @@ class BskService:
         )
         self._session_observations.pop(session_key, None)
         try:
-            nav_result = await self.sessions.execute(
+            nav_result = await self.sessions.execute_action(
                 session_key,
-                lambda sid: ["navigate", url, "--session", sid, "--json"],
-                timeout=self._timeout(TIMEOUT_NAVIGATE),
+                lambda sid: self.cli.navigate(
+                    sid,
+                    url,
+                    timeout=self._timeout(TIMEOUT_NAVIGATE),
+                    raise_on_error=True,
+                ),
             )
         except BskError as exc:
             reason = getattr(exc, "reason", "")
@@ -658,10 +662,15 @@ class BskService:
             if reason in ("cooperation_sync_required", "observation_required") and effect_state != "unknown":
                 self._logger.info("open_page 导航遭遇控制上下文未就绪 (%s)，执行 sync_session 补救", reason)
                 obs = await self.sync_session(session_key)
-                nav_result = await self.sessions.execute(
+                nav_result = await self.sessions.execute_action(
                     session_key,
-                    lambda sid: ["navigate", url, "--observation", obs.observation_id, "--session", sid, "--json"],
-                    timeout=self._timeout(TIMEOUT_NAVIGATE),
+                    lambda sid: self.cli.navigate(
+                        sid,
+                        url,
+                        observation=obs.observation_id,
+                        timeout=self._timeout(TIMEOUT_NAVIGATE),
+                        raise_on_error=True,
+                    ),
                 )
             else:
                 raise
@@ -751,22 +760,19 @@ class BskService:
         counters_before = self.sessions.stats().get("counters", {})
         rebuilds_before = counters_before.get("not_found_rebuilds", 0)
 
-        args: list[str] = ["observe"]
-        if cursor:
-            args += ["--cursor", str(cursor)]
-        if max_depth is not None:
-            args += ["--max-depth", str(int(max_depth))]
-        if max_tokens is not None:
-            args += ["--max-tokens", str(int(max_tokens))]
-        if probe_hover:
-            args.append("--probe-hover")
-        if debug_surfaces:
-            args.append("--debug-surfaces")
-
-        result = await self.sessions.execute(
+        result = await self.sessions.execute_action(
             session_key,
-            lambda sid: self._with_tab_id(args, tab_id) + ["--session", sid, "--json"],
-            timeout=self._timeout(TIMEOUT_OBSERVE),
+            lambda sid: self.cli.observe(
+                sid,
+                cursor=cursor,
+                max_depth=max_depth,
+                max_tokens=max_tokens,
+                probe_hover=probe_hover,
+                debug_surfaces=debug_surfaces,
+                tab_id=tab_id,
+                timeout=self._timeout(TIMEOUT_OBSERVE),
+                raise_on_error=True,
+            ),
             allow_uncertain=True,
         )
         observation = parse_observation(
@@ -1037,11 +1043,14 @@ class BskService:
             参数刻意传 False（默认值），与 click/fill 同一档。
         """
         session_key = self._resolve_key(key)
-        result = await self.sessions.execute(
+        result = await self.sessions.execute_action(
             session_key,
-            # EXPRESSION 是位置参数；--json 让输出可机器解析。
-            lambda sid: ["evaluate", expression, "--session", sid, "--json"],
-            timeout=self._timeout(TIMEOUT_EVALUATE),
+            lambda sid: self.cli.evaluate(
+                sid,
+                expression,
+                timeout=self._timeout(TIMEOUT_EVALUATE),
+                raise_on_error=True,
+            ),
             # 写类动作的待遇：不确定态下不执行任意 JS（见 docstring 的 Note）。
             allow_uncertain=False,
         )
@@ -1929,25 +1938,23 @@ class BskService:
         counters_before = stats_fn().get("counters", {}) if callable(stats_fn) else {}
         rebuilds_before = counters_before.get("not_found_rebuilds", 0) if isinstance(counters_before, dict) else 0
 
-        args: list[str] = ["sync"]
-        if wait_for:
-            args += ["--wait-for", str(wait_for)]
-        if wait_not:
-            args += ["--wait-not", str(wait_not)]
-        if timeout_ms is not None:
-            args += ["--timeout-ms", str(int(timeout_ms))]
-        if max_tokens is not None:
-            args += ["--max-tokens", str(int(max_tokens))]
-
         timeout = (
             self._wait_timeout(int(timeout_ms))
             if timeout_ms is not None and hasattr(self, "_wait_timeout")
             else self._timeout(TIMEOUT_SYNC)
         )
-        result = await self.sessions.execute(
+        result = await self.sessions.execute_action(
             session_key,
-            lambda sid: self._with_tab_id(args, tab_id) + ["--session", sid, "--json"],
-            timeout=timeout,
+            lambda sid: self.cli.sync_tab(
+                sid,
+                tab_id=tab_id,
+                wait_for=wait_for,
+                wait_not=wait_not,
+                timeout_ms=timeout_ms,
+                max_tokens=max_tokens,
+                timeout=timeout,
+                raise_on_error=True,
+            ),
             allow_uncertain=True,
         )
         observation = parse_observation(
@@ -2189,21 +2196,20 @@ class BskService:
             url,
             tab_id if tab_id is not None else "当前Tab",
         )
-        args: list[str] = []
-        if wait_until and wait_until != "load":
-            args += ["--wait-until", str(wait_until)]
-        if timeout_ms is not None:
-            args += ["--timeout", self._bsk_duration(timeout_ms)]
-
-        async def _do_navigate(extra_args: list[str] = ()) -> Any:
-            return await self.sessions.execute(
+        async def _do_navigate(obs_id: str | None = None) -> Any:
+            return await self.sessions.execute_action(
                 session_key,
-                lambda sid: self._with_tab_id(
-                    ["navigate", url, *args, *extra_args], tab_id
-                )
-                + ["--session", sid, "--json"],
+                lambda sid: self.cli.navigate(
+                    sid,
+                    url,
+                    observation=obs_id,
+                    wait_until=wait_until,
+                    timeout_ms=timeout_ms,
+                    tab_id=tab_id,
+                    timeout=self._timeout(TIMEOUT_NAVIGATE),
+                    raise_on_error=True,
+                ),
                 # 超时下限复用 navigate 那一档（45s，必须大于 bsk 自己的 30s）。
-                timeout=self._timeout(TIMEOUT_NAVIGATE),
                 allow_uncertain=False,
             )
 
@@ -2215,7 +2221,7 @@ class BskService:
             if reason in ("cooperation_sync_required", "observation_required") and effect_state != "unknown":
                 self._logger.info("导航遭遇控制上下文未就绪 (%s)，执行 sync_session 补救", reason)
                 obs = await self.sync_session(session_key, tab_id=tab_id)
-                nav = await _do_navigate(["--observation", obs.observation_id])
+                nav = await _do_navigate(obs.observation_id)
             else:
                 raise
 
@@ -2255,18 +2261,17 @@ class BskService:
                 friendly="只能后退（back）或前进（forward），请检查 direction 参数。",
                 code="bad_direction",
             )
-        args: list[str] = []
-        if wait_until and wait_until != "load":
-            args += ["--wait-until", str(wait_until)]
-        if timeout_ms is not None:
-            args += ["--timeout", self._bsk_duration(timeout_ms)]
-        result = await self.sessions.execute(
+        result = await self.sessions.execute_action(
             session_key,
-            lambda sid: self._with_tab_id(
-                ["navigate", direction, *args], tab_id
-            )
-            + ["--session", sid, "--json"],
-            timeout=self._timeout(TIMEOUT_NAVIGATE),
+            lambda sid: self.cli.navigate(
+                sid,
+                direction,
+                wait_until=wait_until,
+                timeout_ms=timeout_ms,
+                tab_id=tab_id,
+                timeout=self._timeout(TIMEOUT_NAVIGATE),
+                raise_on_error=True,
+            ),
             allow_uncertain=False,
         )
         parsed = NavigateResult.from_json(result.data)
@@ -2295,19 +2300,17 @@ class BskService:
             bsk reload --hard --wait-until <W> --timeout <T> --session <ID> --json
         """
         session_key = self._resolve_key(key)
-        args: list[str] = []
-        if hard:
-            args.append("--hard")
-        if wait_until and wait_until != "load":
-            args += ["--wait-until", str(wait_until)]
-        if timeout_ms is not None:
-            args += ["--timeout", self._bsk_duration(timeout_ms)]
-        result = await self.sessions.execute(
+        result = await self.sessions.execute_action(
             session_key,
-            lambda sid: self._with_tab_id(["reload", *args], tab_id)
-            + ["--session", sid, "--json"],
-            # CLI 报告 §20：reload 自己的 --timeout 默认 15s，比 navigate 短一档。
-            timeout=self._timeout(TIMEOUT_HISTORY),
+            lambda sid: self.cli.reload(
+                sid,
+                hard=hard,
+                wait_until=wait_until,
+                timeout_ms=timeout_ms,
+                tab_id=tab_id,
+                timeout=self._timeout(TIMEOUT_HISTORY),
+                raise_on_error=True,
+            ),
             allow_uncertain=False,
         )
         parsed = NavigateResult.from_json(result.data)
@@ -2340,19 +2343,16 @@ class BskService:
             的时候。
         """
         session_key = self._resolve_key(key)
-        args: list[str] = []
-        if wait_until and wait_until != "load":
-            args += ["--wait-until", str(wait_until)]
-        args += ["--timeout", self._bsk_duration(timeout_ms)]
-        result = await self.sessions.execute(
+        result = await self.sessions.execute_action(
             session_key,
-            lambda sid: self._with_tab_id(
-                ["wait-for-navigation", *args], tab_id
-            )
-            + ["--session", sid, "--json"],
-            # 纯等待：bsk 自己的预算是 timeout_ms，外层必须比它大（见模块顶部
-            # "下限的第一条原则"），否则我们会先把它掐掉。
-            timeout=self._wait_timeout(timeout_ms),
+            lambda sid: self.cli.wait_for_navigation(
+                sid,
+                wait_until=wait_until,
+                timeout_ms=timeout_ms,
+                tab_id=tab_id,
+                timeout=self._wait_timeout(timeout_ms),
+                raise_on_error=True,
+            ),
             allow_uncertain=True,
         )
         parsed = NavigateResult.from_json(result.data)
@@ -2421,16 +2421,16 @@ class BskService:
         只读，所以 ``allow_uncertain=True``（与 ``observe`` 同一条理由）。
         """
         session_key = self._resolve_key(key)
-        args: list[str] = []
-        if max_depth is not None:
-            args += ["--max-depth", str(int(max_depth))]
-        if max_tokens is not None:
-            args += ["--max-tokens", str(int(max_tokens))]
-        result = await self.sessions.execute(
+        result = await self.sessions.execute_action(
             session_key,
-            lambda sid: self._with_tab_id(["snapshot", *args], tab_id)
-            + ["--session", sid, "--json"],
-            timeout=self._timeout(TIMEOUT_OBSERVE),
+            lambda sid: self.cli.snapshot(
+                sid,
+                max_depth=max_depth,
+                max_tokens=max_tokens,
+                tab_id=tab_id,
+                timeout=self._timeout(TIMEOUT_OBSERVE),
+                raise_on_error=True,
+            ),
             allow_uncertain=True,
         )
         data = result.data if isinstance(result.data, dict) else {}
@@ -2466,14 +2466,16 @@ class BskService:
             ``--max-bytes`` 就是长度控制手段（TOOL-SPEC §1.3 默认 524288）。
         """
         session_key = self._resolve_key(key)
-        args: list[str] = ["--max-bytes", str(int(max_bytes))]
-        if ref:
-            args += ["--ref", ref]
-        result = await self.sessions.execute(
+        result = await self.sessions.execute_action(
             session_key,
-            lambda sid: self._with_tab_id(["get-html", *args], tab_id)
-            + ["--session", sid, "--json"],
-            timeout=self._timeout(TIMEOUT_OBSERVE),
+            lambda sid: self.cli.get_html(
+                sid,
+                ref=ref,
+                max_bytes=max_bytes,
+                tab_id=tab_id,
+                timeout=self._timeout(TIMEOUT_OBSERVE),
+                raise_on_error=True,
+            ),
             allow_uncertain=True,
         )
         data = result.data if isinstance(result.data, dict) else {}

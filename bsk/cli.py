@@ -94,6 +94,10 @@ class BskCli:
         session: str,
         tab_id: int | str | None = None,
         *,
+        wait_for: str = "",
+        wait_not: str = "",
+        timeout_ms: int | None = None,
+        max_tokens: int | None = None,
         json: bool = True,
         timeout: float = 5.0,
         raise_on_error: bool = False,
@@ -103,6 +107,10 @@ class BskCli:
         Args:
             session: 浏览器会话标识 (Session ID)。
             tab_id: 目标标签页 ID（可选，默认为会话当前激活标签）。
+            wait_for: 等待特定元素出现（可选）。
+            wait_not: 等待特定元素消失（可选）。
+            timeout_ms: 超时毫秒数（可选）。
+            max_tokens: 最大 token 数（可选）。
             json: 是否输出 JSON 格式（默认 True）。
             timeout: 命令超时时间（秒，默认 5.0）。
             raise_on_error: 失败时是否抛出异常（默认 False）。
@@ -110,9 +118,18 @@ class BskCli:
         Returns:
             BskResult 包含 observation_id 与 context_id 的执行结果。
         """
-        params = ["sync", "--session", str(session)]
+        params = ["sync"]
+        if wait_for:
+            params.extend(["--wait-for", str(wait_for)])
+        if wait_not:
+            params.extend(["--wait-not", str(wait_not)])
+        if timeout_ms is not None:
+            params.extend(["--timeout-ms", str(int(timeout_ms))])
+        if max_tokens is not None:
+            params.extend(["--max-tokens", str(int(max_tokens))])
         if tab_id is not None:
             params.extend(["--tab-id", str(tab_id)])
+        params.extend(["--session", str(session)])
         if json:
             params.append("--json")
         return await self._execute(
