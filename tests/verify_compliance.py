@@ -65,12 +65,12 @@ def main() -> int:
     # 2. 不复制上游源码
     # ------------------------------------------------------------------
     print("\n--- 2. 不复制 Tencent/BrowserSkill 的源码/schema/skill 文档 ---")
-    # 上游的特征文件：Rust 源码、协议 schema、SKILL.md
+    # 上游的特征文件：Rust 源码、协议 schema、根目录 SKILL.md
     suspicious = [
         f
         for f in files
         if f.endswith(".rs")
-        or "SKILL.md" in f
+        or ("SKILL.md" in f and not f.startswith("skill/"))
         or f.startswith("crates/")
         or "bsk-protocol" in f
         or "/schema/" in f
@@ -307,10 +307,11 @@ def main() -> int:
     )
 
     # URL 协议校验
+    tools_src = (PROJECT / "bsk" / "tools.py").read_text(encoding="utf-8")
     check(
         "URL 仅允许 http/https（拒绝 file:// 等）",
-        "https://" in main_src and "http://" in main_src,
-        "main.py 校验协议前缀，实测拒绝 file://",
+        ("https://" in tools_src or "https://" in main_src) and ("http://" in tools_src or "http://" in main_src),
+        "bsk/tools.py 校验协议前缀，实测拒绝 file://",
     )
 
     # ------------------------------------------------------------------

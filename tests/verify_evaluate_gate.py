@@ -87,6 +87,13 @@ def _ensure_paths() -> None:
     if os.path.isdir(astrbot_root) and astrbot_root not in sys.path:
         sys.path.insert(0, astrbot_root)
 
+    try:
+        import astrbot  # noqa: F401
+    except ImportError:
+        from astrbot_test_doubles import ensure_astrbot_modules
+
+        ensure_astrbot_modules()
+
 
 # ---------------------------------------------------------------------------
 # 测试替身
@@ -407,6 +414,7 @@ async def run() -> int:
     print("\n--- 静态检查：evaluate 必须是独立工具，且没混进 bsk_act ---")
     # ---------------------------------------------------------------
     try:
+        from astrbot_plugin_bsk_browser.bsk.errors import BskError
         from astrbot_plugin_bsk_browser.bsk.service import BskService
 
         act_args = BskService._build_action_args(

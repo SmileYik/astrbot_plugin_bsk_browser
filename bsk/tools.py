@@ -1231,6 +1231,8 @@ def _validate_session(ctx: _Ctx) -> dict:
         ctx.require("url")
         url = ctx.as_str("url")
         _reject_blank(ctx, "url", "请给一个完整网址，例如 https://example.com。")
+        if not url.lower().startswith(("http://", "https://")):
+            ctx.fail("网址必须以 http:// 或 https:// 开头，例如 https://example.com。")
         browser = ctx.as_str("browser")
         session = ctx.as_str("session")
         timeout_ms = ctx.as_int("timeout_ms", positive=True)
@@ -1284,6 +1286,8 @@ def _validate_page(ctx: _Ctx) -> dict:
         ctx.require("url")
         url = ctx.as_str("url")
         _reject_blank(ctx, "url", "请给一个完整网址，例如 https://example.com。")
+        if not url.lower().startswith(("http://", "https://")):
+            ctx.fail("网址必须以 http:// 或 https:// 开头，例如 https://example.com。")
         if ctx.given("hard"):
             ctx.fail(f"{ctx.where()} 不接受 hard：它只对 reload 有意义。")
         ctx.check_known()
