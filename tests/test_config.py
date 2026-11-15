@@ -762,5 +762,49 @@ class TestMetadataFile(unittest.TestCase):
         self.assertEqual(self.meta["version"], "0.3.1")
 
 
+class TestScreenshotAndWhitelistSettings(unittest.TestCase):
+    """测试截图压缩、长截图策略/截断与网站白名单权限配置。"""
+
+    def test_screenshot_and_whitelist_settings_defaults(self) -> None:
+        s = parse_settings({})
+        self.assertIs(s.screenshot_compress_to_jpg, False)
+        self.assertEqual(s.screenshot_quality, 85)
+        self.assertEqual(s.fullpage_scope, "current")
+        self.assertEqual(s.fullpage_max_height, 8000)
+        self.assertEqual(s.site_whitelist, ())
+
+    def test_screenshot_and_whitelist_settings_custom(self) -> None:
+        custom = {
+            "screenshot_compress_to_jpg": True,
+            "screenshot_quality": 60,
+            "fullpage_scope": "follow",
+            "fullpage_max_height": 5000,
+            "site_whitelist": [
+                {"domain": "baidu.com", "allowed_actions": ["click", "fill"]}
+            ],
+        }
+        s = parse_settings(custom)
+        self.assertIs(s.screenshot_compress_to_jpg, True)
+        self.assertEqual(s.screenshot_quality, 60)
+        self.assertEqual(s.fullpage_scope, "follow")
+        self.assertEqual(s.fullpage_max_height, 5000)
+        self.assertEqual(len(s.site_whitelist), 1)
+        self.assertEqual(s.site_whitelist[0]["domain"], "baidu.com")
+
+    def test_fullpage_scope_fallback_on_invalid(self) -> None:
+        s = parse_settings({"fullpage_scope": "invalid_scope"})
+        self.assertEqual(s.fullpage_scope, "current")
+
+    def test_clamp_screenshot_quality_and_max_height(self) -> None:
+        s1 = parse_settings({"screenshot_quality": -10, "fullpage_max_height": -5})
+        self.assertEqual(s1.screenshot_quality, 1)
+        self.assertEqual(s1.fullpage_max_height, 0)
+
+        s2 = parse_settings({"screenshot_quality": 999, "fullpage_max_height": 999999})
+        self.assertEqual(s2.screenshot_quality, 100)
+        self.assertEqual(s2.fullpage_max_height, 30000)
+
+
 if __name__ == "__main__":
     unittest.main()
+

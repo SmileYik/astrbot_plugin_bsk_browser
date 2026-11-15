@@ -150,5 +150,71 @@
     "type": "string",
     "default": "",
     "hint": "指定一个文件路径用于转存本插件的所有运行与调试日志。若留空或对该路径没有写入操作权限，则自动跳过转存，不影响插件正常运行。"
+  },
+  "screenshot_compress_to_jpg": {
+    "description": "截图压缩为 JPG 格式",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后会将截图压缩为指定质量的 JPEG 格式，以减小体积并加速发送；关闭时直接发送无损原始 PNG 截图（默认关闭，保持最高画质）。"
+  },
+  "screenshot_quality": {
+    "description": "JPG 压缩质量",
+    "type": "int",
+    "default": 85,
+    "slider": {
+      "min": 1,
+      "max": 100,
+      "step": 5
+    },
+    "hint": "当开启「截图压缩为 JPG 格式」时生效。默认 85，可在 1~100 之间调节。"
+  },
+  "fullpage_scope": {
+    "description": "全页截图高度策略",
+    "type": "string",
+    "default": "current",
+    "options": [
+      "current",
+      "follow"
+    ],
+    "hint": "整页长截图时的滚动策略。current（默认）：仅截取触发截图时测得的初始文档高度，即便滚动到底部也不会无限加载新内容，可有效防止 B 站等瀑布流网站长截图超时卡死；follow：跟随页面滚动无限加载新内容直到自然触底，若页面为无限滚动可能导致超时。"
+  },
+  "fullpage_max_height": {
+    "description": "全页截图最大长度限制（像素）",
+    "type": "int",
+    "default": 8000,
+    "slider": {
+      "min": 0,
+      "max": 30000,
+      "step": 500
+    },
+    "hint": "全页截图生成后的最大允许高度（像素）。若截图超过该高度，插件会自动将超出部分截断，避免生成几十 MB 的超大长图导致发送失败。设为 0 表示不限制最大高度。"
+  },
+  "site_whitelist": {
+    "description": "网站与工具操作白名单（非管理员）",
+    "type": "template_list",
+    "default": [],
+    "hint": "当关闭「只允许管理员使用」（admin_only）时生效。为普通用户配置可以浏览哪些网站，以及在访问这些网站时允许调用哪些具体工具操作。不在白名单内的网站将被禁止访问。",
+    "templates": {
+      "site_rule": {
+        "name": "网站规则",
+        "display_item": "domain",
+        "items": {
+          "domain": {
+            "description": "允许的网站域名或主机名（例如 baidu.com、cn.bing.com）",
+            "type": "string",
+            "default": ""
+          },
+          "allowed_actions": {
+            "description": "允许的具体页内操作（格式：工具.动作 如 bsk_interact.click，或简写 click，或通配符 bsk_interact.*；留空表示仅允许打开浏览但禁止点击/输入/截图等页内操作）",
+            "type": "list",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          }
+        }
+      }
+    }
   }
 }
+

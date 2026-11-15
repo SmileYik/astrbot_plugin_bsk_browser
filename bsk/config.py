@@ -41,6 +41,8 @@ __all__ = [
     "DEFAULT_ENABLE_EVALUATE",
     "DEFAULT_ENABLE_REQUEST_ID",
     "DEFAULT_EVALUATE_REQUIRE_ADMIN",
+    "DEFAULT_FULLPAGE_MAX_HEIGHT",
+    "DEFAULT_FULLPAGE_SCOPE",
     "DEFAULT_FULLPAGE_TIMEOUT_SEC",
     "DEFAULT_IDLE_RELEASE_SEC",
     "DEFAULT_JOURNAL_PATH",
@@ -51,11 +53,17 @@ __all__ = [
     "DEFAULT_LOG_MAX_OUTPUT_LENGTH",
     "DEFAULT_MAX_PAGE_CHARS",
     "DEFAULT_MAX_SESSIONS",
+    "DEFAULT_SCREENSHOT_COMPRESS_TO_JPG",
     "DEFAULT_SCREENSHOT_DIR",
+    "DEFAULT_SCREENSHOT_QUALITY",
     "DEFAULT_SESSION_SCOPE",
+    "DEFAULT_SITE_WHITELIST",
     "FRAMEWORK_TIMEOUT_FLOOR_SEC",
     "FRAMEWORK_TIMEOUT_SAFETY_MARGIN_SEC",
     "FRAMEWORK_TOOL_TIMEOUT_PATH",
+    "FULLPAGE_MAX_HEIGHT_MAX",
+    "FULLPAGE_MAX_HEIGHT_MIN",
+    "FULLPAGE_SCOPES",
     "FULLPAGE_TIMEOUT_MAX_SEC",
     "FULLPAGE_TIMEOUT_MIN_SEC",
     "IDLE_RELEASE_MAX_SEC",
@@ -66,6 +74,8 @@ __all__ = [
     "MAX_SESSIONS_MAX",
     "MAX_SESSIONS_MIN",
     "MAX_SESSIONS_WARN_AT",
+    "SCREENSHOT_QUALITY_MAX",
+    "SCREENSHOT_QUALITY_MIN",
     "SESSION_SCOPES",
     "Settings",
     "as_timeout_seconds",
@@ -236,6 +246,31 @@ DEFAULT_FULLPAGE_TIMEOUT_SEC = 120.0
 AstrBot 的 ``tool_call_timeout`` 限制的也是工具执行耗时，不包含模型出 token
 的时间。所以"模型很慢"不是调大它的理由 —— 页面特别慢、网络特别差才是。
 """
+
+DEFAULT_SCREENSHOT_COMPRESS_TO_JPG = False
+"""截图是否压缩为 JPG 格式。默认 False（不压缩直发 PNG 原图）。"""
+
+DEFAULT_SCREENSHOT_QUALITY = 85
+"""JPG 压缩质量。默认 85。"""
+
+SCREENSHOT_QUALITY_MIN = 1
+SCREENSHOT_QUALITY_MAX = 100
+
+DEFAULT_FULLPAGE_SCOPE = "current"
+"""整页截图高度策略。默认 'current'（限制当前初始高度，防止瀑布流无限滚动）。"""
+
+FULLPAGE_SCOPES = frozenset({"current", "follow"})
+"""整页截图高度策略的合法取值。"""
+
+DEFAULT_FULLPAGE_MAX_HEIGHT = 8000
+"""整页截图最大长度限制（像素）。默认 8000，0 表示不截断。"""
+
+FULLPAGE_MAX_HEIGHT_MIN = 0
+FULLPAGE_MAX_HEIGHT_MAX = 30000
+
+DEFAULT_SITE_WHITELIST: tuple[dict[str, Any], ...] = ()
+"""普通用户网站操作白名单。默认空（关闭 admin_only 时未配置白名单则禁止普通用户浏览）。"""
+
 
 # --------------------------------------------------------------------------
 # 取值边界与外部约束
@@ -612,6 +647,37 @@ def _parse_session_scope(value: Any) -> str:
     return DEFAULT_SESSION_SCOPE
 
 
+def _parse_fullpage_scope(value: Any) -> str:
+    """解析整页截图策略，只接受 ``current`` / ``follow``，其余回退默认值。"""
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in FULLPAGE_SCOPES:
+            return token
+    return DEFAULT_FULLPAGE_SCOPE
+
+
+def _parse_site_whitelist(raw: Any) -> tuple[dict[str, Any], ...]:
+    """解析普通用户网站白名单规则，确保结构规整且不抛异常。"""
+    if not isinstance(raw, (list, tuple)):
+        return DEFAULT_SITE_WHITELIST
+    parsed = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        domain = _as_str(item.get("domain"), "").strip().lower()
+        actions_raw = item.get("allowed_actions")
+        actions = []
+        if isinstance(actions_raw, (list, tuple)):
+            for a in actions_raw:
+                s = _as_str(a, "").strip()
+                if s:
+                    actions.append(s)
+        parsed.append({"domain": domain, "allowed_actions": tuple(actions)})
+    return tuple(parsed)
+
+
+
+
 # --------------------------------------------------------------------------
 # 强类型配置
 # --------------------------------------------------------------------------
@@ -738,6 +804,22 @@ class Settings:
     log_max_output_length: int
     """调试日志中工具返回与 bsk 命令输出的最大字符截断长度。默认 2048，<= 0 表示不截断。"""
 
+    screenshot_compress_to_jpg: bool
+    """截图是否压缩为 JPG 格式。默认 False（直接发送原图 PNG）。"""
+
+    screenshot_quality: int
+    """JPG 压缩质量（1..100）。默认 85。"""
+
+    fullpage_scope: str
+    """整页截图高度策略，'current' 或 'follow'。默认 'current'。"""
+
+    fullpage_max_height: int
+    """整页截图最大长度限制（像素），0..30000。默认 8000，0 表示不限制。"""
+
+    site_whitelist: tuple[dict[str, Any], ...]
+    """普通用户网站与操作白名单。"""
+
+
 
 
 def parse_settings(raw: dict | None, *, data_dir: str = "") -> Settings:
@@ -848,7 +930,27 @@ def parse_settings(raw: dict | None, *, data_dir: str = "") -> Settings:
                 raw.get("log_max_output_length"), DEFAULT_LOG_MAX_OUTPUT_LENGTH
             )
         ),
+        screenshot_compress_to_jpg=_as_bool(
+            raw.get("screenshot_compress_to_jpg"), DEFAULT_SCREENSHOT_COMPRESS_TO_JPG
+        ),
+        screenshot_quality=int(
+            _clamp(
+                _as_int(raw.get("screenshot_quality"), DEFAULT_SCREENSHOT_QUALITY),
+                SCREENSHOT_QUALITY_MIN,
+                SCREENSHOT_QUALITY_MAX,
+            )
+        ),
+        fullpage_scope=_parse_fullpage_scope(raw.get("fullpage_scope")),
+        fullpage_max_height=int(
+            _clamp(
+                _as_int(raw.get("fullpage_max_height"), DEFAULT_FULLPAGE_MAX_HEIGHT),
+                FULLPAGE_MAX_HEIGHT_MIN,
+                FULLPAGE_MAX_HEIGHT_MAX,
+            )
+        ),
+        site_whitelist=_parse_site_whitelist(raw.get("site_whitelist")),
     )
+
 
 
 def validate_settings(s: Settings) -> list[str]:
