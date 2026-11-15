@@ -70,7 +70,7 @@ def main() -> int:
         f
         for f in files
         if f.endswith(".rs")
-        or ("SKILL.md" in f and not f.startswith("skill/"))
+        or ("SKILL.md" in f and not (f.startswith("skills/") or f.startswith("skill/")))
         or f.startswith("crates/")
         or "bsk-protocol" in f
         or "/schema/" in f

@@ -5,7 +5,7 @@ description: 控制 Chromium 浏览器进行自动化网页浏览、搜索、交
 
 # bsk-browser (AstrBot 浏览器自动化核心指南)
 
-本技能供机器人使用 `astrbot_plugin_bsk_browser` 插件通过 bsk 工具链控制 Chromium 浏览器完成网页任务。该技能是所有基于本插件的网站特化技能（如 `browse-baidu.com`、`browse-cn.bing.com`）的基础依赖与核心规范。
+本技能供机器人使用 `astrbot_plugin_bsk_browser` 插件通过 bsk 工具链控制 Chromium 浏览器完成网页任务。该技能是所有基于本插件的网站特化技能（如 `bsk-browse-baidu.com`、`bsk-browse-cn.bing.com`）的基础依赖与核心规范。
 
 ## 核心安全与行为准则
 
