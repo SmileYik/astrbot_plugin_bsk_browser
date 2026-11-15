@@ -51,6 +51,49 @@ def test_detect_no_new_tab_returns_none():
 
     asyncio.run(_test())
 
+def test_render_tabs_supports_dict_format():
+    service = BskService(settings=MagicMock())
+    data = {
+        "tabs": [
+            {"tab_id": 101, "title": "Page 1", "url": "https://a.com", "active": False},
+            {"tab_id": 102, "title": "Page 2", "url": "https://b.com", "active": True},
+        ]
+    }
+    rendered = service._render_tabs(data)
+    assert len(rendered) == 2
+    assert rendered[0]["tab_id"] == 101
+    assert rendered[1]["tab_id"] == 102
+
+
+def test_detect_new_tabs_and_switch_integration_with_dict_payload():
+    async def _test():
+        service = BskService(settings=MagicMock())
+        service._resolve_key = MagicMock(return_value="sess_1")
+        service._session_known_tabs["sess_1"] = {101}
+
+        async def mock_execute(key, fn, **kwargs):
+            cmd = fn("fake_sid")
+            if "list" in cmd:
+                return MagicMock(data={
+                    "tabs": [
+                        {"tab_id": 101, "title": "Page 1", "url": "https://a.com", "active": False},
+                        {"tab_id": 102, "title": "Page 2", "url": "https://b.com", "active": True},
+                    ]
+                })
+            elif "select" in cmd:
+                return MagicMock(data={"tab_id": 102})
+            return MagicMock(data={})
+
+        service.sessions.execute = AsyncMock(side_effect=mock_execute)
+
+        info = await service.detect_new_tabs_and_switch("sess_1")
+        assert info is not None
+        assert info["new_tab_id"] == 102
+        assert 102 in service._session_known_tabs["sess_1"]
+
+    asyncio.run(_test())
+
+
 def test_render_interact_renders_new_tab_notification():
     import sys
     from pathlib import Path

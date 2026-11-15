@@ -3209,10 +3209,16 @@ class BskService:
         返回的东西。元素结构将来变了，这里最多是少显示几个字段，
         不会显示错的东西。
         """
-        if not isinstance(data, list):
+        if isinstance(data, dict):
+            items = data.get("tabs", [])
+        elif isinstance(data, list):
+            items = data
+        else:
+            return []
+        if not isinstance(items, list):
             return []
         out: list[dict[str, Any]] = []
-        for item in data:
+        for item in items:
             if not isinstance(item, dict):
                 continue
             row: dict[str, Any] = {}
