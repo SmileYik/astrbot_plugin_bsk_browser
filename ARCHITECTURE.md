@@ -249,6 +249,37 @@ def default_shot_dir(data_dir, logger=None) -> Path:      # <data_dir>/shots
 设备名）时同样按"未注入"降级，而不是抛 `TypeError`。返回的路径**总是绝对的**：
 相对路径会随工作目录漂移，而 journal 要跨进程读。
 
+### 4.8 `bsk/permissions.py`（域名与动作鉴权匹配）
+
+该模块专职负责普通用户的白名单域名与工具动作的匹配鉴权，纯逻辑实现，零框架依赖：
+
+- `normalize_domain(url_or_host: str) -> str`：
+  提取协议主机、移除端口并规范化为小写，剥离 `www.` 前缀，便于统一匹配。
+- `is_domain_match(pattern: str, target: str) -> bool`：
+  支持子域名层级匹配（如 `baidu.com` 可匹配 `www.baidu.com`、`tieba.baidu.com`）。
+- `is_action_allowed(allowed_actions: Sequence[str], tool: str, action: str) -> bool`：
+  支持简写动作（如 `click`）、全称（如 `bsk_interact.click`）与通配符（`*`, `bsk_interact.*`），同时自动兼容连字符与下划线命名。
+- `check_site_permission(site_whitelist, current_url, tool, action) -> tuple[bool, str]`：
+  校验目标 URL 与动作。包含在白名单中的域名默认具有导航权（`open`/`navigate`）；页内操作则严格检查 `allowed_actions`。
+
+### 4.9 截图韧性与截断流水线（`bsk/shots.py` 与 `bsk/service.py`）
+
+针对 Bilibili 等无限滚动瀑布流网站全屏截图导致永续滚动超时的缺陷，构建了双层防线：
+
+1. **CLI 范围策略传递**：在 `service.screenshot_ex` 中构建 `bsk screenshot --full-page --scope <fullpage_scope>`。默认 `scope="current"` 仅截取初始文档高度并触发懒加载，不跟随瀑布流无限追加。
+2. **像素高度截断**：由 `shots.truncate_image_height(path, max_height)` 通过 Pillow 探测图片高度，若超过 `fullpage_max_height`（默认 8000px），裁剪保留前 8000 像素并更新元数据，回执附加警示信息，保障 100% 成功返回。
+3. **按需格式转换与压缩**：若 `screenshot_compress_to_jpg=true`，调用 `compress_and_optimize_image` 将其无损转为指定 quality 的 JPEG 文件，大幅压缩字节体积。
+
+### 4.10 细粒度权限控制与双层隔离架构（`main.py`）
+
+当 `admin_only=false` 时，系统激活细粒度白名单权限控制：
+
+1. **第一层（提示词层剥离）**：通过 `@filter.on_llm_request()` 监听器，若调用方非管理员，动态自 `req.func_tool` 中剥离 `DANGEROUS_TOOL_NAMES`（`bsk_load_tools`、`bsk_debug`、`bsk_assist`、`bsk_status`、`bsk_evaluate` 5 个高危/内部工具），杜绝提示词泄露与模型误调。
+2. **第二层（执行门禁硬拦截）**：在 `_dispatch` 前置执行 `_check_call_permission`，即使恶意注入也被硬性拦截。
+3. **基础运维生命周期放行**：`LIFECYCLE_ACTIONS`（`session.start/stop/list/sync`, `tabs.list/select/close`）全局放行，杜绝外链死锁，支持正常资源退出与回收。
+4. **活动 URL 感知与防内联逃逸**：`BskService` 维护各会话的 `_active_urls` 与 `_dirty_urls`。点击、按键、跳转后标记 dirty；下一次页内操作鉴权前调用 `tab list` 刷新真实活动 URL，若跳出白名单域名则拦截操作。
+5. **权限审计日志**：所有检查路径输出 `[权限审计] sender=... session=... domain=... tool=... action=... result=... reason=...` DEBUG 日志。
+
 ---
 
 ## 5. 关键设计决策
