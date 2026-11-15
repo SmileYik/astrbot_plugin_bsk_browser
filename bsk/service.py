@@ -577,12 +577,27 @@ class BskService:
         """
         session_key = self._resolve_key(key)
         self._session_observations.pop(session_key, None)
-        nav_result = await self.sessions.execute(
-            session_key,
-            lambda sid: ["navigate", url, "--session", sid, "--json"],
-            timeout=self._timeout(TIMEOUT_NAVIGATE),
-        )
+        try:
+            nav_result = await self.sessions.execute(
+                session_key,
+                lambda sid: ["navigate", url, "--session", sid, "--json"],
+                timeout=self._timeout(TIMEOUT_NAVIGATE),
+            )
+        except BskError as exc:
+            reason = getattr(exc, "reason", "")
+            effect_state = getattr(exc, "effect_state", "")
+            if reason in ("cooperation_sync_required", "observation_required") and effect_state != "unknown":
+                self._logger.info("open_page 导航遭遇控制上下文未就绪 (%s)，执行 sync_session 补救", reason)
+                obs = await self.sync_session(session_key)
+                nav_result = await self.sessions.execute(
+                    session_key,
+                    lambda sid: ["navigate", url, "--observation", obs.observation_id, "--session", sid, "--json"],
+                    timeout=self._timeout(TIMEOUT_NAVIGATE),
+                )
+            else:
+                raise
         nav = NavigateResult.from_json(nav_result.data)
+        self._session_observations.pop(session_key, None)
 
         observation = await self.observe(session_key)
         return nav, observation
@@ -2133,16 +2148,31 @@ class BskService:
             args += ["--wait-until", str(wait_until)]
         if timeout_ms is not None:
             args += ["--timeout", self._bsk_duration(timeout_ms)]
-        nav = await self.sessions.execute(
-            session_key,
-            lambda sid: self._with_tab_id(
-                ["navigate", url, *args], tab_id
+
+        async def _do_navigate(extra_args: list[str] = ()) -> Any:
+            return await self.sessions.execute(
+                session_key,
+                lambda sid: self._with_tab_id(
+                    ["navigate", url, *args, *extra_args], tab_id
+                )
+                + ["--session", sid, "--json"],
+                # 超时下限复用 navigate 那一档（45s，必须大于 bsk 自己的 30s）。
+                timeout=self._timeout(TIMEOUT_NAVIGATE),
+                allow_uncertain=False,
             )
-            + ["--session", sid, "--json"],
-            # 超时下限复用 navigate 那一档（45s，必须大于 bsk 自己的 30s）。
-            timeout=self._timeout(TIMEOUT_NAVIGATE),
-            allow_uncertain=False,
-        )
+
+        try:
+            nav = await _do_navigate()
+        except BskError as exc:
+            reason = getattr(exc, "reason", "")
+            effect_state = getattr(exc, "effect_state", "")
+            if reason in ("cooperation_sync_required", "observation_required") and effect_state != "unknown":
+                self._logger.info("导航遭遇控制上下文未就绪 (%s)，执行 sync_session 补救", reason)
+                obs = await self.sync_session(session_key, tab_id=tab_id)
+                nav = await _do_navigate(["--observation", obs.observation_id])
+            else:
+                raise
+
         parsed = NavigateResult.from_json(nav.data)
         self._session_observations.pop(session_key, None)
         return {
