@@ -35,6 +35,7 @@ from typing import Any
 
 from astrbot.api import logger as astrbot_logger
 from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, StarTools
 
 from .bsk import tools as tools_mod
@@ -2374,9 +2375,23 @@ class BskBrowserPlugin(Star):
 
     @filter.on_llm_request()
     async def on_llm_request(self, event: AstrMessageEvent, req: Any) -> None:
-        """非管理员请求过滤：剥离高危/内部工具，防范提示词投毒并降低 Token 消耗。"""
+        """LLM 请求前处理：
+        1. 当当前用户具备浏览器权限且配置了注入内容时，向 system_prompt 注入自定义提示词；
+        2. 非管理员请求过滤：剥离高危/内部工具，防范提示词投毒并降低 Token 消耗。
+        """
         if not self.settings.enabled:
             return
+
+        # 1. 权限用户提示词注入
+        prompt = (getattr(self.settings, "llm_prompt_injection", "") or "").strip()
+        if prompt and self._denied(event) is None:
+            curr = getattr(req, "system_prompt", "") or ""
+            if curr:
+                req.system_prompt = f"{curr}\n\n{prompt}"
+            else:
+                req.system_prompt = prompt
+
+        # 2. 非管理员请求过滤：剥离高危/内部工具
         if self._safe_is_admin(event):
             return
 

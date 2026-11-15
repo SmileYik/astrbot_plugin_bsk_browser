@@ -221,12 +221,21 @@ def ensure_astrbot_modules() -> None:
             "exception": lambda *a, **k: None,
         },
     )()
+    class ProviderRequest:
+        def __init__(self, system_prompt: str = "") -> None:
+            self.system_prompt = system_prompt
+
+    api_provider = types.ModuleType("astrbot.api.provider")
+    api_provider.ProviderRequest = ProviderRequest
+
     api.event = event
     api.star = star
+    api.provider = api_provider
     astrbot.api = api
 
     sys.modules["astrbot"] = astrbot
     sys.modules["astrbot.api"] = api
+    sys.modules["astrbot.api.provider"] = api_provider
     sys.modules["astrbot.api.event"] = event
     sys.modules["astrbot.api.star"] = star
     sys.modules["astrbot.core"] = core
