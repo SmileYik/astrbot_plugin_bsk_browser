@@ -20,12 +20,19 @@ f-string：那样在日志级别被关掉时白白做一次字符串拼接与格
 
 from __future__ import annotations
 
+import threading
+import traceback
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 __all__ = [
+    "FileLogger",
     "NULL_LOGGER",
     "LoggerLike",
     "NullLogger",
+    "TeeLogger",
+    "create_safe_file_logger",
     "truncate_log_text",
 ]
 
@@ -111,3 +118,167 @@ class NullLogger:
 
 NULL_LOGGER = NullLogger()
 """全局共用的兜底实例（无状态，可以安全共享）。"""
+
+
+class FileLogger:
+    """基于纯标准库实现的线程安全文件日志记录器。
+
+    满足 :class:`LoggerLike` 协议，采用惰性 %-格式化输出，附带毫秒时间戳与级别前缀。
+    写文件遇到任何异常（磁盘满、权限吊销）自动禁用并安全静默，绝不向外抛异常。
+    """
+
+    def __init__(self, path: Path | str) -> None:
+        self.path = Path(path).resolve()
+        self._lock = threading.Lock()
+        self._disabled = False
+        self._file: Any | None = None
+        try:
+            self._file = open(self.path, "a", encoding="utf-8")
+        except Exception:
+            self._disabled = True
+
+    def _write(self, level: str, msg: object, *args: Any, **kwargs: Any) -> None:
+        if self._disabled or self._file is None:
+            return
+        try:
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            if args:
+                try:
+                    text = str(msg) % args
+                except Exception:
+                    text = f"{msg} {' '.join(str(a) for a in args)}"
+            else:
+                text = str(msg)
+
+            exc_text = ""
+            if kwargs.get("exc_info") or level == "ERROR":
+                tb = traceback.format_exc()
+                if tb and tb.strip() != "NoneType: None":
+                    exc_text = f"\n{tb.rstrip()}"
+
+            line = f"{now_str} [{level}] {text}{exc_text}\n"
+
+            with self._lock:
+                if self._file is not None and not self._disabled:
+                    self._file.write(line)
+                    self._file.flush()
+        except Exception:
+            self._disabled = True
+            try:
+                if self._file is not None:
+                    self._file.close()
+            except Exception:
+                pass
+            self._file = None
+
+    def debug(self, msg: object, *args: Any, **kwargs: Any) -> None:
+        self._write("DEBUG", msg, *args, **kwargs)
+
+    def info(self, msg: object, *args: Any, **kwargs: Any) -> None:
+        self._write("INFO", msg, *args, **kwargs)
+
+    def warning(self, msg: object, *args: Any, **kwargs: Any) -> None:
+        self._write("WARNING", msg, *args, **kwargs)
+
+    def error(self, msg: object, *args: Any, **kwargs: Any) -> None:
+        self._write("ERROR", msg, *args, **kwargs)
+
+    def exception(self, msg: object, *args: Any, **kwargs: Any) -> None:
+        kwargs_with_exc = dict(kwargs)
+        kwargs_with_exc["exc_info"] = True
+        self._write("ERROR", msg, *args, **kwargs_with_exc)
+
+    def close(self) -> None:
+        """关闭文件句柄。"""
+        with self._lock:
+            if self._file is not None:
+                try:
+                    self._file.flush()
+                    self._file.close()
+                except Exception:
+                    pass
+                self._file = None
+
+
+class TeeLogger:
+    """将一条日志同时分发给多个 logger 的组合器。
+
+    满足 :class:`LoggerLike` 协议。主 logger（首个）始终优先调用；
+    后续副 logger 的异常自动吞掉，保证主通道绝不被破坏。
+    """
+
+    def __init__(self, *loggers: LoggerLike) -> None:
+        self._loggers = tuple(l for l in loggers if l is not None)
+
+    def debug(self, msg: object, *args: Any, **kwargs: Any) -> None:
+        for i, l in enumerate(self._loggers):
+            try:
+                l.debug(msg, *args, **kwargs)
+            except Exception:
+                if i == 0:
+                    raise
+
+    def info(self, msg: object, *args: Any, **kwargs: Any) -> None:
+        for i, l in enumerate(self._loggers):
+            try:
+                l.info(msg, *args, **kwargs)
+            except Exception:
+                if i == 0:
+                    raise
+
+    def warning(self, msg: object, *args: Any, **kwargs: Any) -> None:
+        for i, l in enumerate(self._loggers):
+            try:
+                l.warning(msg, *args, **kwargs)
+            except Exception:
+                if i == 0:
+                    raise
+
+    def error(self, msg: object, *args: Any, **kwargs: Any) -> None:
+        for i, l in enumerate(self._loggers):
+            try:
+                l.error(msg, *args, **kwargs)
+            except Exception:
+                if i == 0:
+                    raise
+
+    def exception(self, msg: object, *args: Any, **kwargs: Any) -> None:
+        for i, l in enumerate(self._loggers):
+            try:
+                l.exception(msg, *args, **kwargs)
+            except Exception:
+                if i == 0:
+                    raise
+
+    def close(self) -> None:
+        """安全关闭所有支持 close 的下游 logger。"""
+        for l in self._loggers:
+            close_fn = getattr(l, "close", None)
+            if callable(close_fn):
+                try:
+                    close_fn()
+                except Exception:
+                    pass
+
+
+def create_safe_file_logger(path_str: str) -> FileLogger | None:
+    """安全探测并创建日志文件记录器。
+
+    Args:
+        path_str: 用户填入的文件路径字符串。
+
+    Returns:
+        若路径为空、是已有目录或无写权限，返回 None；否则返回初始化的 FileLogger。
+    """
+    if not path_str or not isinstance(path_str, str) or not path_str.strip():
+        return None
+    try:
+        p = Path(path_str.strip()).expanduser().resolve()
+        if p.exists() and p.is_dir():
+            return None
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a", encoding="utf-8") as probe:
+            probe.write("")
+        return FileLogger(p)
+    except Exception:
+        return None

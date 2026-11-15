@@ -42,7 +42,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from bsk.config import parse_settings  # noqa: E402
 from bsk.journal import JournalEntry, SessionJournal  # noqa: E402
-from bsk.logger import NULL_LOGGER, LoggerLike, NullLogger  # noqa: E402
+from bsk.logger import (  # noqa: E402
+    NULL_LOGGER,
+    FileLogger,
+    LoggerLike,
+    NullLogger,
+    TeeLogger,
+    create_safe_file_logger,
+)
 from bsk.models import BskResult  # noqa: E402
 from bsk.service import BskService  # noqa: E402
 from bsk.session import SessionManager  # noqa: E402
@@ -249,6 +256,67 @@ class TestNullLoggerContract(unittest.TestCase):
     def test_protocol_rejects_a_non_logger(self) -> None:
         """协议检查要真的能拒绝：否则上面两条断言等于没测。"""
         self.assertNotIsInstance(object(), LoggerLike)
+
+
+class TestFileAndTeeLogger(TempDirCase):
+    """纯标准库 FileLogger、TeeLogger 与安全探针的测试。"""
+
+    def test_create_safe_file_logger_empty_or_dir(self) -> None:
+        self.assertIsNone(create_safe_file_logger(""))
+        self.assertIsNone(create_safe_file_logger("   "))
+        self.assertIsNone(create_safe_file_logger(str(self.dir)))
+
+    def test_create_safe_file_logger_creates_parent_and_file(self) -> None:
+        target = self.dir / "nested" / "sub" / "app.log"
+        logger = create_safe_file_logger(str(target))
+        self.assertIsNotNone(logger)
+        self.assertIsInstance(logger, LoggerLike)
+        try:
+            logger.debug("调试信息 %s", "成功")
+            content = target.read_text(encoding="utf-8")
+            self.assertIn("[DEBUG]", content)
+            self.assertIn("调试信息 成功", content)
+        finally:
+            logger.close()
+
+    def test_file_logger_formats_exception_traceback(self) -> None:
+        target = self.dir / "err.log"
+        logger = create_safe_file_logger(str(target))
+        self.assertIsNotNone(logger)
+        try:
+            try:
+                raise ValueError("测试炸了")
+            except Exception:
+                logger.exception("捕获到异常")
+            content = target.read_text(encoding="utf-8")
+            self.assertIn("[ERROR]", content)
+            self.assertIn("捕获到异常", content)
+            self.assertIn("Traceback (most recent call last):", content)
+            self.assertIn("ValueError: 测试炸了", content)
+        finally:
+            logger.close()
+
+    def test_tee_logger_dispatches_to_multiple_loggers(self) -> None:
+        rec1 = RecordingLogger()
+        rec2 = RecordingLogger()
+        tee = TeeLogger(rec1, rec2)
+        self.assertIsInstance(tee, LoggerLike)
+
+        tee.info("信息 %d", 123)
+        self.assertEqual(len(rec1.records), 1)
+        self.assertEqual(len(rec2.records), 1)
+        self.assertIn("信息 123", rec1.rendered())
+        self.assertIn("信息 123", rec2.rendered())
+
+    def test_tee_logger_close_propagates(self) -> None:
+        target = self.dir / "tee.log"
+        file_logger = create_safe_file_logger(str(target))
+        rec = RecordingLogger()
+        tee = TeeLogger(rec, file_logger)
+        tee.debug("写入一条")
+        tee.close()
+        # 句柄已关闭
+        self.assertTrue(target.exists())
 
 
 # ----------------------------------------------------------------------
