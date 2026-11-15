@@ -804,6 +804,25 @@ class TestScreenshotAndWhitelistSettings(unittest.TestCase):
         self.assertEqual(s2.screenshot_quality, 100)
         self.assertEqual(s2.fullpage_max_height, 30000)
 
+    def test_site_whitelist_schema_hierarchical_options(self) -> None:
+        schema_path = Path(__file__).resolve().parent.parent / "_conf_schema.json"
+        with open(schema_path, "r", encoding="utf-8") as f:
+            schema = json.load(f)
+        site_rule = schema["site_whitelist"]["templates"]["site_rule"]
+        self.assertEqual(site_rule["name"], "网站授权规则")
+        actions_meta = site_rule["items"]["allowed_actions"]
+        self.assertIn("options", actions_meta)
+        self.assertIn("labels", actions_meta)
+        self.assertIn("subtitles", actions_meta)
+        self.assertEqual(len(actions_meta["options"]), len(actions_meta["labels"]))
+        self.assertEqual(len(actions_meta["options"]), len(actions_meta["subtitles"]))
+        self.assertIn("bsk_interact.*", actions_meta["options"])
+        self.assertIn("bsk_interact.click", actions_meta["options"])
+        idx_parent = actions_meta["options"].index("bsk_interact.*")
+        idx_child = actions_meta["options"].index("bsk_interact.click")
+        self.assertEqual(actions_meta["labels"][idx_parent], "bsk_interact:")
+        self.assertTrue(actions_meta["labels"][idx_child].startswith("\u00a0\u00a0\u00a0\u00a0click"))
+
 
 if __name__ == "__main__":
     unittest.main()
