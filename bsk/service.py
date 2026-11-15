@@ -2687,8 +2687,13 @@ class BskService:
             if alias in opts and "key" not in opts:
                 opts["key"] = opts.pop(alias)
         session_key = self._resolve_key(key)
-        argv, readonly = self._build_interact_args(action, opts)
         target = str(opts.get("target") or "").strip()
+
+        # 前置注入并消耗 observation 令牌（针对无目标 wheel / press）
+        if action in ("wheel", "press") and not target and session_key in self._session_observations:
+            opts["observation_id"] = self._session_observations.pop(session_key, None)
+
+        argv, readonly = self._build_interact_args(action, opts)
         auto_scrolled = False
         auto_synced = False
 
@@ -2715,8 +2720,10 @@ class BskService:
         try:
             result = await _run_action()
         except BskError as exc:
-            if getattr(exc, "reason", "") == "cooperation_sync_required" and getattr(exc, "effect_state", "") != "unknown":
-                self._logger.info("检测到页面控制上下文未同步 (cooperation_sync_required)，执行 sync_session 补救")
+            reason = getattr(exc, "reason", "")
+            effect_state = getattr(exc, "effect_state", "")
+            if reason in ("cooperation_sync_required", "observation_required", "control_context_invalid") and effect_state != "unknown":
+                self._logger.info("检测到页面控制上下文或观察令牌需同步 (%s)，执行 sync_session 补救", reason)
                 obs = await self.sync_session(session_key, tab_id=tab_id)
                 auto_synced = True
 
@@ -2736,6 +2743,11 @@ class BskService:
                         reason="ref_not_found",
                     )
 
+                if action in ("wheel", "press") and not target:
+                    opts["observation_id"] = obs.observation_id
+                    self._session_observations.pop(session_key, None)
+                    argv, readonly = self._build_interact_args(action, opts)
+
                 try:
                     result = await _run_action()
                 except BskError as retry_exc:
@@ -2751,8 +2763,8 @@ class BskService:
                 try:
                     await _run_scroll()
                 except BskError as scroll_exc:
-                    if getattr(scroll_exc, "reason", "") == "cooperation_sync_required" and getattr(scroll_exc, "effect_state", "") != "unknown":
-                        self._logger.info("scroll-to 遇到 cooperation_sync_required，执行 sync_session 补救")
+                    if getattr(scroll_exc, "reason", "") in ("cooperation_sync_required", "observation_required", "control_context_invalid") and getattr(scroll_exc, "effect_state", "") != "unknown":
+                        self._logger.info("scroll-to 遇到控制上下文或令牌需同步，执行 sync_session 补救")
                         obs = await self.sync_session(session_key, tab_id=tab_id)
                         auto_synced = True
                         is_ref = target.startswith("@") or (target.lower().startswith("e") and target[1:].isdigit())
