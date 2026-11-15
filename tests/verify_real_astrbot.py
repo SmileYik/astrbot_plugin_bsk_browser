@@ -147,7 +147,6 @@ async def main() -> int:
             "bsk_open",
             "bsk_read",
             "bsk_act",
-            "bsk_screenshot",
             "bsk_close",
             "bsk_status",
         }
@@ -226,36 +225,36 @@ async def main() -> int:
     except Exception as exc:  # noqa: BLE001
         record("bsk_act 只读动作可用", False, repr(exc))
 
-    # 3.5 bsk_screenshot（视口 + 全页，验证新配置项在真实链路生效）
+    # 3.5 bsk_inspect(action="screenshot")（视口 + 全页，验证新配置项在真实链路生效）
     try:
         t0 = time.monotonic()
-        out = await _call_tool(bound["bsk_screenshot"], admin, full_page=False)
+        out = await _call_tool(bound["bsk_inspect"], admin, action="screenshot", full_page=False)
         dt_vp = time.monotonic() - t0
         imgs = [i for i in out if hasattr(i, "path")]
         texts = " ".join(str(i) for i in out if i is not None and not hasattr(i, "path"))
         img_ok = bool(imgs) and Path(imgs[0].path).is_file()
         record(
-            "bsk_screenshot 视口截图（图片已发出）",
+            "bsk_inspect 视口截图（图片已发出）",
             img_ok,
             f"{dt_vp:.2f}s，{'图片存在' if img_ok else '没有图片'}",
         )
         if imgs:
             created.add(Path(imgs[0].path).parent.name)
     except Exception as exc:  # noqa: BLE001
-        record("bsk_screenshot 视口截图（图片已发出）", False, repr(exc))
+        record("bsk_inspect 视口截图（图片已发出）", False, repr(exc))
 
     try:
         t0 = time.monotonic()
-        out = await _call_tool(bound["bsk_screenshot"], admin, full_page=True)
+        out = await _call_tool(bound["bsk_inspect"], admin, action="screenshot", full_page=True)
         dt_fp = time.monotonic() - t0
         imgs = [i for i in out if hasattr(i, "path")]
         record(
-            "bsk_screenshot 全页截图（新超时配置项）",
+            "bsk_inspect 全页截图（新超时配置项）",
             bool(imgs) and Path(imgs[0].path).is_file(),
             f"{dt_fp:.2f}s",
         )
     except Exception as exc:  # noqa: BLE001
-        record("bsk_screenshot 全页截图（新超时配置项）", False, repr(exc))
+        record("bsk_inspect 全页截图（新超时配置项）", False, repr(exc))
 
     # 3.6 bsk_evaluate（默认关闭，验证的是"被正确拒绝"）
     #

@@ -155,7 +155,7 @@ bsk --version
 | 配置项 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `enabled` | 布尔 | `true` | 插件总开关。关掉后所有浏览器工具直接拒绝调用，但不用卸载插件。 |
-| `legacy_tools` | 布尔 | `true` | 是否注册旧版工具。默认开启：开启时注册 4 个常用旧工具（`bsk_screenshot` / `bsk_close` / `bsk_status` / `bsk_logs`，见 6.2），罕见的 3 个由下面的 `legacy_fringe_tools` 单独控制。关掉它会停用全部 8 个旧工具，每轮对话省下 1631–1803 字符的工具说明（实测，见 6.3）。**`bsk_evaluate` 不受这一项影响**（它有独立的 `enable_evaluate`）。 |
+| `legacy_tools` | 布尔 | `true` | 是否注册旧版工具。默认开启：开启时注册 3 个常用旧工具（`bsk_close` / `bsk_status` / `bsk_logs`，见 6.2），罕见的 3 个由下面的 `legacy_fringe_tools` 单独控制。关掉它会停用全部 7 个旧工具，每轮对话省下工具说明的固定开销。**`bsk_evaluate` 不受这一项影响**（它有独立的 `enable_evaluate`）。 |
 | `legacy_fringe_tools` | 布尔 | `false` | 是否注册罕见的 3 个旧工具：`bsk_open`（打开网页）、`bsk_read`（读页面）、`bsk_act`（点击/输入等交互）。默认关闭 —— 这三个都有等价的新工具（`bsk_page` / `bsk_inspect` / `bsk_interact`），关掉不会少任何能力，只省下每轮 1941–2061 字符（实测）。提示词或工作流里还在直接写这三个名字时才需要打开。只在 `legacy_tools` 开启时才有意义。 |
 | `lazy_debug_tool` | 布尔 | `true` | `bsk_debug`（抓包与网络调试，24 个动作）是否按需加载。默认开启：它一开始不注册给模型，模型需要调试时先调常驻的小工具 `bsk_load_tools` 把它加载进当轮（只在当轮有效）。关掉它就变成一直注册、随时可用，代价是每轮多带 4937–4971 字符（实测约 5000）。详见 6.1。 |
 | `bsk_path` | 字符串 | `"bsk"` | `bsk` 可执行文件的位置。填 `bsk` 表示从系统 PATH 查找；找不到时改填绝对路径，如 `C:\Users\Alice\.local\bin\bsk.exe`。 |
@@ -166,7 +166,7 @@ bsk --version
 | `allowed_users` | 列表 | `[]`（空） | 额外放行的用户 ID 白名单。填了之后，名单里的人即使不是管理员也能用。可以一行一个，也可以写 `123,456`。 |
 | `session_scope` | 字符串 | `"umo"` | 会话隔离方式。`umo` = 按聊天窗口隔离（同一个群里的人共用一条浏览器会话，不同群各一条）；`user` = 在上面基础上再按人拆开，每个群的每个人各一条（同一个人在 A 群和 B 群是两条独立会话，互不干扰）。 |
 | `idle_release_sec` | 浮点 | `240.0` | 空闲多久主动关掉浏览器会话（秒）。必须小于 300，因为 `bsk` 自己会在空闲 5 分钟（300 秒）时回收会话。 |
-| `fullpage_timeout_sec` | 浮点 | `120.0` | 整页截图（`bsk_screenshot` 的 `full_page`）最多等多久，范围 30–600 秒。它只管浏览器操作这一段耗时，与模型生成回复的快慢无关（模型出字慢不是调大这一项能解决的）。实测长页面约 11.7 秒、短页面约 2.9 秒，所以默认 120 秒已有约 10 倍余量，通常不用改。它不影响视口截图（固定 30 秒）。⚠️ 注意 AstrBot 自己也有一层上限，见第 9 节第 1 条。 |
+| `fullpage_timeout_sec` | 浮点 | `120.0` | 整页截图（`bsk_inspect` 的 `full_page`）最多等多久，范围 30–600 秒。它只管浏览器操作这一段耗时，与模型生成回复的快慢无关（模型出字慢不是调大这一项能解决的）。实测长页面约 11.7 秒、短页面约 2.9 秒，所以默认 120 秒已有约 10 倍余量，通常不用改。它不影响视口截图（固定 30 秒）。⚠️ 注意 AstrBot 自己也有一层上限，见第 9 节第 1 条。 |
 | `screenshot_dir` | 字符串 | `""`（空） | 截图保存目录。留空即可，会存到插件数据目录下的 `astrbot_plugin_bsk_browser\shots`（即 `data\plugin_data\astrbot_plugin_bsk_browser\shots`）。要自己指定就得填完整路径；目录不存在会自动创建（父级目录也会一起建）。 |
 | `journal_path` | 字符串 | `""`（空） | 会话所有权记录文件的位置。留空即可，会写到插件数据目录下的 `astrbot_plugin_bsk_browser\sessions.json`（即 `data\plugin_data\astrbot_plugin_bsk_browser\sessions.json`）。这份记录记的是「插件自己开过哪些浏览器会话」：万一 AstrBot 被强制结束（任务管理器结束进程、崩溃、断电）来不及关窗口，下次启动时插件靠它把自己遗留的那些会话精确关掉（只认 id 和窗口号，不会碰别的程序开的会话）。只有想固定这个文件的位置、方便自己打开查看时才填完整路径。 |
 | `max_page_chars` | 整数 | `3000` | 单次读网页时最多把多少个字符交给模型。网页正文动辄几万字，全塞进去会占满上下文、变慢变贵。最大 20000。执行 JavaScript 的返回值也按这个上限截断。 |
@@ -223,13 +223,13 @@ bsk --version
 
 ## 6. 8 个主工具 + 两组 legacy 旧工具
 
-插件一共注册 **16 个工具**，但默认只有 **12 个**会进入模型的工具列表：
+插件一共注册 **15 个工具**，但默认只有 **11 个**会进入模型的工具列表：
 
 - **8 个主工具（推荐）** —— 多数与腾讯 BrowserSkill 的命令结构一一对应（`bsk_debug` 是从 `browser_inspect` 拆出来的调试部分，`bsk_load_tools` 是本插件独有的加载入口，见 6.5），一个工具管一类事，用 `action` 参数选择具体动作，合计 **57 个 action**。其中 `bsk_debug` 默认按需加载（模型要先调 `bsk_load_tools`），所以默认就在列表里的是 7 个；
-- **4 个常驻旧工具（core）** —— `bsk_screenshot` / `bsk_close` / `bsk_status` / `bsk_logs`，由 `legacy_tools`（默认开启）控制。这几个要么新工具做不到（发图片、整页截图），要么是诊断入口；
+- **3 个常驻旧工具（core）** —— `bsk_close` / `bsk_status` / `bsk_logs`，由 `legacy_tools`（默认开启）控制。原 `bsk_screenshot` 已彻底下线，由新工具 `bsk_inspect(action="screenshot")` 原生承担发图和整页截图能力；
 - **3 个罕见旧工具（fringe）** —— `bsk_open` / `bsk_read` / `bsk_act`，都有等价的新工具，由 `legacy_fringe_tools`（默认关闭）控制。
 
-另外 `bsk_evaluate` 是独立的高危工具，始终在注册表里，能不能用只由 `enable_evaluate` 决定（见第 5 节）。7 + 4 + 1 = 12，这就是默认的注册数。
+另外 `bsk_evaluate` 是独立的高危工具，始终在注册表里，能不能用只由 `enable_evaluate` 决定（见第 5 节）。7 + 3 + 1 = 11，这就是默认的注册数。
 
 你不需要记这些名字 —— 直接对机器人说人话就行，模型会自己决定调哪个。下表供你排查问题时对照。
 
@@ -249,27 +249,26 @@ bsk --version
 几点需要知道的行为：
 
 - **`bsk_debug` 默认按需加载**：它一开始不在模型的工具列表里，模型需要时会先调 `bsk_load_tools(action="debug")`，之后**同一轮对话的下一步**就能用 `bsk_debug` 了。加载只对当前这一轮有效 —— 你发下一条消息时它又回到未加载状态。这样做是因为它光参数说明就有 4431 字符，而绝大多数对话并不调试网络。想让它一直在，把 `lazy_debug_tool` 关掉即可（代价是每轮多带约 5000 字符）。
-- `bsk_inspect` 的 `screenshot` **只回一段文字描述，不会把图片发给你**。要真的收到图片、或要整页长图，请让机器人用旧工具 `bsk_screenshot`（见 6.2）。
+- `bsk_inspect` 的 `screenshot` **会直接把图片作为消息发给用户**（支持 `full_page=True` 截取整页长图，返回绝对路径）；原独立工具 `bsk_screenshot` 已下线合并。
 - `bsk_session(start)` 的 `no_focus` 参数目前没有效果：本插件始终在后台打开窗口，不抢焦点。保留这个参数只是为了让参数名与 BrowserSkill 对齐。
 - `bsk_assist` 的 `request-help` 返回的 `outcome` 里，**只有 `continued` 与 `completed` 表示你已经做完了**；`cancelled` / `timed_out` / `navigated` / `disabled` 都不是。这一点插件会如实转达给模型，避免它在你根本没碰过的页面上继续操作。
 
 ### 6.2 两组 legacy 旧工具
 
-0.1.x 时代的单动作工具一共 8 个，行为一个字没改，只是描述里加了一句「兼容保留，新用法请优先用 XX」。它们现在分两组：
+0.1.x 时代的单动作工具现在精简为 7 个（原 `bsk_screenshot` 彻底下线，发图与整页截图合并入 `bsk_inspect`），行为一个字没改，只是描述里加了一句「兼容保留，新用法请优先用 XX」。它们现在分两组：
 
 | 分组 | 工具名 | 由哪一项配置控制 | 默认 |
 |---|---|---|---|
-| core（常用、无等价替代） | `bsk_screenshot`、`bsk_close`、`bsk_status`、`bsk_logs` | `legacy_tools` | 注册 |
+| core（常用、无等价替代） | `bsk_close`、`bsk_status`、`bsk_logs` | `legacy_tools` | 注册 |
 | fringe（都有等价新工具） | `bsk_open`、`bsk_read`、`bsk_act` | `legacy_tools` + `legacy_fringe_tools` | **不注册** |
 
-要找回 fringe 那三个，把 `legacy_fringe_tools` 打开；要一次停用全部 8 个，把 `legacy_tools` 关掉（此时 `legacy_fringe_tools` 填什么都不影响结果）。`bsk_evaluate` 两组都不属于，它只由 `enable_evaluate` 控制。
+要找回 fringe 那三个，把 `legacy_fringe_tools` 打开；要一次停用全部 7 个，把 `legacy_tools` 关掉（此时 `legacy_fringe_tools` 填什么都不影响结果）。`bsk_evaluate` 两组都不属于，它只由 `enable_evaluate` 控制。
 
 | 工具名 | 做什么 | 模型通常在什么时候调用 |
 |---|---|---|
 | `bsk_open`（默认不注册） | 打开一个网址，并顺带把页面内容读回来（标题 + 正文摘要 + 可交互元素编号）。已有会话就复用，没有就新建。参数：`url`（必填，必须 `http://` 或 `https://` 开头）、`new_session`（可选，`true` 表示先关掉当前会话重开一个）。 | 用户说「打开 xxx」「去 xxx 看看」时；页面卡死或需要重新登录时用 `new_session=true` 重开。新工具 `bsk_page` + `bsk_inspect` 已经覆盖它。 |
 | `bsk_read`（默认不注册） | 读取当前页面的内容和可交互元素编号。返回页面标题、正文摘要，以及形如 `@e1`、`@e2` 的元素编号。 | 用户说「这个页面写了什么」时；或刚做完一次点击/输入、需要确认页面变化时。页面变化后编号会变，所以操作完建议重新读一次。新工具 `bsk_inspect` 已经覆盖它。 |
 | `bsk_act`（默认不注册） | 在当前页面上执行一个操作（点击、输入、按键、滚动等），动作列表见 6.4。 | 用户说「点那个按钮」「在搜索框里输入 xxx」「往下滚一点」时。操作完通常会再调 `bsk_read` 确认结果。新工具 `bsk_interact` 已经覆盖它。 |
-| `bsk_screenshot` | 给当前页面截图，并直接把图片发给你。参数：`full_page`（可选，`true` 截取整个长页面，较慢；默认只截可见区域）。 | 用户说「截个图看看」时。**目前只有它能真的把图片发出去、也只有它能整页截图**，新工具做不到这两件事。 |
 | `bsk_close` | 关闭当前聊天正在使用的浏览器会话（会关掉那个 Agent Window）。 | 用户说「关掉浏览器」「不用了」「结束」时。长时间不用的会话也会自动回收，但显式关闭更干净。 |
 | `bsk_status` | 检查环境：`bsk` 是否装好、浏览器扩展是否连上、当前有多少会话。这个工具不需要管理员权限，方便任何人自助排查。 | 用户说「为什么用不了」「检查一下」时；或任何浏览器操作失败后。 |
 | `bsk_logs` | 读控制台消息或网络请求，支持 `since` 游标增量读取。 | 与 `bsk_inspect` 的 `console` / `network` 等价，保留是为了兼容旧提示词的写法。 |
@@ -344,7 +343,7 @@ bsk --version
 
 「action 名与参数名一致」不是巧合，是这次改造的目标：你按 BrowserSkill 文档写的提示词，把工具名换个前缀就能直接用。参数同时接受 `snake_case` 与 `camelCase`（BrowserSkill 文档里是后者），插件会自动归一化。
 
-**本插件超出 BrowserSkill 的部分**（BrowserSkill 本身不提供，请继续用旧工具）：执行任意 JavaScript 的 `bsk_evaluate`，以及 `bsk_screenshot` 的整页截图能力。
+**本插件超出 BrowserSkill 的部分**：执行任意 JavaScript 的 `bsk_evaluate`，以及 `bsk_inspect(action="screenshot")` 的整页长截图与直接发图能力。
 
 > 本插件与腾讯没有任何隶属关系，工具命名沿用 `bsk_` 前缀是为了与 0.1.x 保持连续、并避免与生态里其它 `browser_*` 插件撞名，不代表官方。详见第 11 节。
 

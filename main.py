@@ -78,10 +78,9 @@ LOGS_LABELS: dict[str, str] = {
 #
 # 分组依据是"有没有等价的新工具"，以及"日常用不用得上"：
 #
-# - core：常用且**没有**等价替代的 4 个。``bsk_status`` 是本插件唯一的诊断入口；
-#   ``bsk_close`` 关会话；``bsk_screenshot`` 是**唯一能把图片直接发给用户**的截图
-#   （``bsk_inspect`` 的 screenshot 返回的是文件路径，模型看不到图）；
-#   ``bsk_logs`` 读控制台/网络日志。
+# - core：常用且**没有**等价替代的 3 个。``bsk_status`` 是本插件唯一的诊断入口；
+#   ``bsk_close`` 关会话；``bsk_logs`` 读控制台/网络日志。
+#   （原 ``bsk_screenshot`` 已彻底下线并合入新工具 ``bsk_inspect(action="screenshot")``）。
 # - fringe：都有等价新工具，只是名字不同（``bsk_open`` → ``bsk_page``/``bsk_session``、
 #   ``bsk_read`` → ``bsk_inspect``、``bsk_act`` → ``bsk_interact``），所以默认不注册，
 #   省下约 1900 字符的固定 prompt 开销（实测三格式 1941/2013/2061 取最小值）；
@@ -91,7 +90,6 @@ LOGS_LABELS: dict[str, str] = {
 # （``enable_evaluate``），把它绑到 ``legacy_tools``/``legacy_fringe_tools`` 上会让
 # 用户误以为"关掉旧工具"就等于"关掉执行脚本"，而实际上它是被另一项控制的。
 LEGACY_CORE_TOOL_NAMES: tuple[str, ...] = (
-    "bsk_screenshot",
     "bsk_close",
     "bsk_status",
     "bsk_logs",
@@ -107,13 +105,12 @@ LEGACY_TOOL_NAMES: tuple[str, ...] = (
     "bsk_open",
     "bsk_read",
     "bsk_act",
-    "bsk_screenshot",
     "bsk_close",
     "bsk_status",
     "bsk_evaluate",
     "bsk_logs",
 )
-"""8 个旧工具的完整名单（= core + fringe + ``bsk_evaluate``），顺序与定义先后一致。
+"""7 个旧工具的完整名单（= core + fringe + ``bsk_evaluate``），顺序与定义先后一致。
 
 保留它是为了不破坏既有引用（文档、其它检查脚本按这 8 个名字核对注册数）。
 运行时真正用来决定停用哪一组的是 :data:`LEGACY_CORE_TOOL_NAMES` 与
@@ -347,7 +344,7 @@ def _next_since(cursor: int, log: ConsoleLog) -> int:
 def _trace_tool_call(tool_name: str):
     """用于追踪 LLM 工具调用的切面装饰器。
 
-    支持普通异步函数（async def）与异步生成器（async def 返回 AsyncGenerator，如 bsk_screenshot）。
+    支持普通异步函数（async def）与异步生成器（async def 返回 AsyncGenerator，如 bsk_inspect）。
     在调用前记录触发时间、工具名、所属会话及参数；
     在调用后（无论成功还是异常）记录耗时、状态及截断后的返回值。
     """
@@ -1741,7 +1738,7 @@ class BskBrowserPlugin(Star):
                         if res.get("new_tab_id"):
                             result["tab_id"] = res["new_tab_id"]
                 except Exception as exc:  # noqa: BLE001
-                    self.logger.debug("点击后检测新标签页失败（忽略）：%r", exc)
+                    astrbot_logger.debug("点击后检测新标签页失败（忽略）：%r", exc)
         return self._render_interact(action, result)
 
     @staticmethod
@@ -2281,53 +2278,7 @@ class BskBrowserPlugin(Star):
             return self._fail(f"执行操作时出现未预期的错误：{exc}")
 
     # ------------------------------------------------------------------
-    # 工具 4：截图
-    # ------------------------------------------------------------------
-
-    @filter.llm_tool("bsk_screenshot")
-    @_trace_tool_call("bsk_screenshot")
-    async def bsk_screenshot(self, event: AstrMessageEvent, full_page: bool = False):
-        """给当前浏览器页面截图，并直接把图片发给用户。
-
-        （兼容保留，新用法请优先用 `bsk_inspect`（action="screenshot", full_page=...））。
-        图片会以消息形式发送，你不需要描述图片内容，除非用户要求。
-
-        Args:
-            full_page(boolean): 设为 true 截取整个长页面（较慢，可能需要几十秒）；默认只截可见区域
-        """
-        denied = self._denied(event)
-        if denied:
-            yield self._fail(denied)
-            return
-
-        key = self._key(event)
-        try:
-            payload = await self.service.screenshot(key, full_page=bool(full_page))
-        except BskError as exc:
-            yield self._fail(f"截图失败：{exc.friendly}{exc.format_diagnostic()}")
-            return
-        except Exception as exc:  # noqa: BLE001
-            astrbot_logger.exception("[bsk_browser] bsk_screenshot 未预期错误")
-            yield self._fail(f"截图时出现未预期的错误：{exc}")
-            return
-
-        message = payload.for_llm
-        if payload.warning:
-            message = f"{message}\n注意：{payload.warning}"
-
-        # 先把图片 yield 给用户，再 yield 文本回灌给模型。
-        #   注意 async generator 里不能写 `return <值>`（会是 SyntaxError），
-        #   要把文本也 yield 出去。
-        try:
-            yield event.image_result(payload.path)
-        except Exception as exc:  # noqa: BLE001 - 发图失败不应吞掉文本回执
-            astrbot_logger.warning("[bsk_browser] 发送截图失败：%r", exc)
-            message = f"{message}\n（图片发送失败了，截图文件在：{payload.path}）"
-
-        yield message
-
-    # ------------------------------------------------------------------
-    # 工具 5：关闭会话
+    # 工具 4：关闭会话
     # ------------------------------------------------------------------
 
     @filter.llm_tool("bsk_close")
@@ -2356,7 +2307,7 @@ class BskBrowserPlugin(Star):
             return self._fail(f"关闭浏览器会话时出现未预期的错误：{exc}")
 
     # ------------------------------------------------------------------
-    # 工具 6：诊断
+    # 工具 5：诊断
     # ------------------------------------------------------------------
 
     @filter.llm_tool("bsk_status")
@@ -2456,7 +2407,7 @@ class BskBrowserPlugin(Star):
         return "\n".join(lines)
 
     # ------------------------------------------------------------------
-    # 工具 7：执行任意 JavaScript（高风险，默认关闭 + 强制管理员）
+    # 工具 6：执行任意 JavaScript（高风险，默认关闭 + 强制管理员）
     # ------------------------------------------------------------------
 
     @filter.llm_tool("bsk_evaluate")
@@ -2499,7 +2450,7 @@ class BskBrowserPlugin(Star):
             return self._fail(f"执行脚本时出现未预期的错误：{exc}")
 
     # ------------------------------------------------------------------
-    # 工具 8：读取控制台消息与网络请求（只读，与 bsk_read 同级）
+    # 工具 7：读取控制台消息与网络请求（只读，与 bsk_read 同级）
     # ------------------------------------------------------------------
 
     @filter.llm_tool("bsk_logs")

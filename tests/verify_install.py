@@ -189,14 +189,13 @@ print("__RESULT__" + json.dumps(out, ensure_ascii=False))
             "bsk_open",
             "bsk_read",
             "bsk_act",
-            "bsk_screenshot",
             "bsk_close",
             "bsk_status",
         }
         actual = set(c["tools"])
 
         check(
-            "6 个必需工具全部注册",
+            "5 个必需工具全部注册",
             required.issubset(actual),
             f"缺少：{sorted(required - actual)}" if not required.issubset(actual) else f"实际：{sorted(actual)}",
         )

@@ -104,8 +104,8 @@ DEFAULT_LEGACY_TOOLS = True
 注意：``bsk_evaluate`` 不受本开关影响 —— 它有独立的
 ``enable_evaluate``，是高风险工具，语义不同。
 
-本项关掉时会把**全部** 8 个旧工具停掉，包括常用且没有替代品的
-``bsk_status`` / ``bsk_close`` / ``bsk_screenshot`` / ``bsk_logs``。
+本项关掉时会把**全部** 7 个旧工具停掉，包括常用且没有替代品的
+``bsk_status`` / ``bsk_close`` / ``bsk_logs``。
 只想去掉那 3 个"有新工具等价替代"的罕见工具，请保持本项开启，
 改关 :data:`DEFAULT_LEGACY_FRINGE_TOOLS`。
 """
@@ -127,9 +127,9 @@ DEFAULT_LEGACY_FRINGE_TOOLS = False
 ``bsk_open`` / ``bsk_read`` / ``bsk_act``。
 
 与 ``legacy_tools`` 的分工：后者管的是"旧工具整体要不要"，本项管的是
-"旧工具里最没用的那一小撮要不要"。常用且**没有替代品**的 4 个
-（``bsk_status`` 诊断、``bsk_close`` 关会话、``bsk_screenshot`` 唯一能发图的截图、
-``bsk_logs`` 读日志）刻意归在常驻组，只要 ``legacy_tools=true`` 就一定注册。
+"旧工具里最没用的那一小撮要不要"。常用且**没有替代品**的 3 个
+（``bsk_status`` 诊断、``bsk_close`` 关会话、``bsk_logs`` 读日志）
+刻意归在常驻组，只要 ``legacy_tools=true`` 就一定注册。
 
 不受本项影响：``bsk_evaluate``（有独立的 ``enable_evaluate``）。
 """
@@ -677,7 +677,7 @@ class Settings:
     则 8 个全停（约 3600 字符）。
 
     注意它会**连带停掉**常用的 ``bsk_status`` / ``bsk_close`` /
-    ``bsk_screenshot`` / ``bsk_logs``，只想去掉罕见的那三个请改关
+    ``bsk_logs``，只想去掉罕见的那三个请改关
     :attr:`legacy_fringe_tools`。
 
     不受本项影响：``bsk_evaluate``（有独立的 ``enable_evaluate``）。
@@ -777,7 +777,7 @@ class Settings:
 
     这三个都有等价的新工具，默认不注册可省约 1900 字符的 prompt
     （实测 google/anthropic/openai = 1941/2013/2061，取最小值取整）。
-    常用且无替代品的 4 个（``bsk_status`` / ``bsk_close`` / ``bsk_screenshot`` /
+    常用且无替代品的 3 个（``bsk_status`` / ``bsk_close`` /
     ``bsk_logs``）归常驻组，不受本项影响；``bsk_evaluate`` 有独立开关，同样不受影响。
 
     详见 :data:`DEFAULT_LEGACY_FRINGE_TOOLS`。

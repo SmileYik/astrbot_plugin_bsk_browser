@@ -1,11 +1,12 @@
-"""L4 工具层端到端测试：直接 await 本脚本覆盖的那 6 个旧工具函数 ——
-core 组的 ``bsk_screenshot`` / ``bsk_close`` / ``bsk_status``，
-fringe 组的 ``bsk_open`` / ``bsk_read`` / ``bsk_act``。
+"""L4 工具层端到端测试：直接 await/consume 本脚本覆盖的工具函数 ——
+core 组的 ``bsk_close`` / ``bsk_status``，
+fringe 组的 ``bsk_open`` / ``bsk_read`` / ``bsk_act``，
+以及支持截图的 ``bsk_inspect(action="screenshot")``。
 
 ## 这一层补的是什么缺口
 
 ``main.py`` 里的每个 ``@filter.llm_tool`` 函数内部都有自己的一段逻辑：
-参数校验、权限门、URL 协议白名单、异常包装、``bsk_screenshot`` 的 async generator
+参数校验、权限门、URL 协议白名单、异常包装、``bsk_inspect(action="screenshot")`` 的 async generator
 行为、``bsk_act`` 的动作名归一化。既有的三层测试都不覆盖它：
 
 - L1（``tests/test_*.py``）只测 ``bsk/`` 纯逻辑，用假 runner；
@@ -273,7 +274,7 @@ async def call(fn, *args, **kwargs):
 async def consume(gen) -> tuple[list, BaseException | None]:
     """消费一个 async generator，返回 ``(已 yield 的项, 异常)``。
 
-    ``bsk_screenshot`` 是 async generator（框架的 ``call_local_llm_tool`` 就是
+    ``bsk_inspect(action="screenshot")`` 是 async generator（框架的 ``call_local_llm_tool`` 就是
     用 ``async for`` 消费它的），不能直接 await。
     """
     items: list = []
@@ -452,10 +453,13 @@ async def group_permission() -> None:
     )
     check_str_result("1.6 白名单外用户（sender_id=2）被拒绝", blocked, exc_b, ("白名单",))
 
-    # --- 1.7 bsk_screenshot 的权限门（async generator 分支）---
+    # --- 1.7 bsk_inspect(action="screenshot") 的权限门（async generator 分支）---
     # 这是独立的一条代码路径：拒绝时它必须 yield 一次然后 return，而不是抛异常。
     items, gen_exc = await consume(
-        inst.bsk_screenshot(FakeEvent(is_admin=False, sender_id="10001", umo=UMO_BROWSER))
+        inst.bsk_inspect(
+            FakeEvent(is_admin=False, sender_id="10001", umo=UMO_BROWSER),
+            action="screenshot",
+        )
     )
     ok = (
         gen_exc is None
@@ -464,7 +468,7 @@ async def group_permission() -> None:
         and "仅限管理员" in items[0]
     )
     record(
-        "1.7 非管理员调用 bsk_screenshot 只 yield 一条拒绝文本",
+        "1.7 非管理员调用 bsk_inspect screenshot 只 yield 一条拒绝文本",
         ok,
         f"items={items!r} exc={gen_exc!r}",
     )
@@ -585,28 +589,28 @@ async def group_real_browser() -> None:
         )
 
     # 3.4 截图（async generator：先图后文）
-    items, gen_exc = await consume(inst.bsk_screenshot(admin))
+    items, gen_exc = await consume(inst.bsk_inspect(admin, action="screenshot"))
     if gen_exc is not None:
-        record("3.4 bsk_screenshot 正常产出一张图片", False, f"生成器抛异常：{gen_exc!r}")
+        record("3.4 bsk_inspect screenshot 正常产出一张图片", False, f"生成器抛异常：{gen_exc!r}")
     else:
         record(
-            "3.4 bsk_screenshot 至少 yield 两项",
+            "3.4 bsk_inspect screenshot 至少 yield 两项",
             len(items) >= 2,
             f"共 {len(items)} 项：{[type(i).__name__ for i in items]}",
         )
         image_items = [i for i in items if hasattr(i, "path")]
         text_items = [i for i in items if isinstance(i, str)]
         if not image_items:
-            record("3.5 bsk_screenshot 产出图片结果", False, f"没有带 .path 的项：{items!r}")
+            record("3.5 bsk_inspect screenshot 产出图片结果", False, f"没有带 .path 的项：{items!r}")
         else:
             ok_png, detail = png_info(str(image_items[0].path))
             record(
-                "3.5 bsk_screenshot 产出的图片真实存在且是 PNG 魔数",
+                "3.5 bsk_inspect screenshot 产出的图片真实存在且是 PNG 魔数",
                 ok_png,
                 f"{image_items[0].path}；{detail}",
             )
         record(
-            "3.6 bsk_screenshot 同时 yield 描述文本",
+            "3.6 bsk_inspect screenshot 同时 yield 描述文本",
             bool(text_items) and "截图" in text_items[-1],
             f"{text_items[-1][:120]!r}" if text_items else "没有文本项",
         )
@@ -795,7 +799,7 @@ async def group_image_failure_fallback() -> None:
         return
     record("6.1 降级用例的前置打开成功", True, f"session={session_id_for(inst, UMO_BROKEN_IMG)}")
 
-    items, gen_exc = await consume(inst.bsk_screenshot(ev))
+    items, gen_exc = await consume(inst.bsk_inspect(ev, action="screenshot"))
     if gen_exc is not None:
         record("6.2 发图失败时生成器不抛异常", False, f"抛异常：{gen_exc!r}")
         return

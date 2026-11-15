@@ -97,12 +97,11 @@ async def main() -> int:
         "bsk_open",
         "bsk_read",
         "bsk_act",
-        "bsk_screenshot",
         "bsk_close",
         "bsk_status",
     }
     check(
-        "6 个工具都拿到了可调用句柄",
+        "5 个工具都拿到了可调用句柄",
         expected.issubset(set(bound)),
         f"拿到：{sorted(bound)}",
     )

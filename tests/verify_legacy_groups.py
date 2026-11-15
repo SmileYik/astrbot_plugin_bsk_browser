@@ -107,7 +107,6 @@ LAZY_TOOLS: tuple[str, ...] = ("bsk_debug",)
 
 # core：常用且无等价替代的旧工具，``legacy_tools=true`` 时应当始终在。
 CORE_TOOLS: tuple[str, ...] = (
-    "bsk_screenshot",
     "bsk_close",
     "bsk_status",
     "bsk_logs",

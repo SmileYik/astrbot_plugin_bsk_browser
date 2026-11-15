@@ -84,18 +84,18 @@ class TestToolLogging(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[已截断", finish_log)
 
     async def test_async_generator_tool_logs_start_and_finish(self) -> None:
-        """测试异步生成器工具（bsk_screenshot）的起止记录与 yield 透传。"""
+        """测试异步生成器工具（bsk_inspect screenshot）的起止记录与 yield 透传。"""
         payload = ShotPayload(
             path="/tmp/shot.png",
             for_llm="LLM screenshot result " + "s" * 100,
             byte_size=1024,
             warning="",
         )
-        self.plugin.service.screenshot = AsyncMock(return_value=payload)
+        self.plugin.service.screenshot_ex = AsyncMock(return_value=payload)
         self.event.image_result = MagicMock(return_value="[IMAGE:/tmp/shot.png]")
 
         with patch.object(main_mod, "astrbot_logger", self.logger):
-            gen = self.plugin.bsk_screenshot(self.event, full_page=False)
+            gen = self.plugin.bsk_inspect(self.event, action="screenshot")
             items = [item async for item in gen]
 
         self.assertEqual(len(items), 2)
@@ -107,11 +107,11 @@ class TestToolLogging(unittest.IsolatedAsyncioTestCase):
 
         start_log = debug_logs[0].render()
         self.assertIn("[工具调用开始]", start_log)
-        self.assertIn("工具: bsk_screenshot", start_log)
+        self.assertIn("工具: bsk_inspect", start_log)
 
         finish_log = debug_logs[1].render()
         self.assertIn("[工具调用结束]", finish_log)
-        self.assertIn("工具: bsk_screenshot", finish_log)
+        self.assertIn("工具: bsk_inspect", finish_log)
         self.assertIn("状态: 成功", finish_log)
 
     async def test_permission_denied_logs_start_and_finish(self) -> None:
@@ -153,11 +153,11 @@ class TestToolLogging(unittest.IsolatedAsyncioTestCase):
     async def test_async_generator_early_break_logs_finish(self) -> None:
         """测试消费方提前 break 生成器时，GeneratorExit 仍能触发结束日志。"""
         payload = ShotPayload(path="/tmp/shot.png", for_llm="LLM shot", byte_size=100, warning="")
-        self.plugin.service.screenshot = AsyncMock(return_value=payload)
+        self.plugin.service.screenshot_ex = AsyncMock(return_value=payload)
         self.event.image_result = MagicMock(return_value="[IMAGE]")
 
         with patch.object(main_mod, "astrbot_logger", self.logger):
-            gen = self.plugin.bsk_screenshot(self.event)
+            gen = self.plugin.bsk_inspect(self.event, action="screenshot")
             async for item in gen:
                 # 只消费第一项就提前退出，触发 GeneratorExit
                 break

@@ -507,9 +507,9 @@ async def bsk_session(self, event: AstrMessageEvent, **kwargs):
 
 **为什么 `legacy_fringe_tools` 默认是 `false`**：这是本次升级唯一会让老用户感知到的默认变化，
 之所以敢默认关，是因为那 3 个都有等价的新工具（`bsk_open` → `bsk_page` + `bsk_inspect`、
-`bsk_read` → `bsk_inspect`、`bsk_act` → `bsk_interact`），关掉不减能力；而常用的 4 个
-要么新工具做不到（`bsk_screenshot` 会真的发图片、能整页截图），要么是诊断入口
-（`bsk_status`、`bsk_logs`），所以留在 `legacy_tools` 这一级。两个开关都开时才是"全兼容"形态。
+`bsk_read` → `bsk_inspect`、`bsk_act` → `bsk_interact`），关掉不减能力；而常用的 3 个
+是诊断入口与关会话工具（`bsk_status`、`bsk_close`、`bsk_logs`，原 `bsk_screenshot` 已下线合入新工具 `bsk_inspect`），
+所以留在 `legacy_tools` 这一级。两个开关都开时才是"全兼容"形态。
 
 **为什么直接设 `tool.active = False`，而不是调框架的 `deactivate_llm_tool_async`**：
 后者会把这个名字写进**持久化**的 `inactivated_llm_tools`（全局 SharedPreferences）。
@@ -564,8 +564,8 @@ async def bsk_session(self, event: AstrMessageEvent, **kwargs):
 | SSE 实时观察 / 侧边栏 UI / 缩略图 | 有 | **无** | 展示层能力。AstrBot 没有 DSH 的 `webServer` 路由 seam 与客户端插件体系，无承载之处 |
 | `lazyTools`（大工具按需注册） | 有（skill 调用后注册） | **支持**（模型调用 `bsk_load_tools` 后加载 `bsk_debug`） | 触发方式不同：DSH 靠 skill 触发，本插件靠一个常驻的小工具触发；本插件改的是**当轮** `ProviderRequest.func_tool`，同一轮的下一次请求就生效，不必等下一步操作（§5 D11）。它替换掉了早先"只能在插件加载期开关"的权宜方案 |
 | `bsk_evaluate` | **不暴露** | **保留**（独立开关 + 强制管理员） | 本插件**超出** DSH 的部分。这是 0.1.x 的既有功能，且风险已由 `enable_evaluate` + `evaluate_require_admin` 两道独立闸单独门控（§5 D7）。移除它等于回退既有能力 |
-| `bsk_screenshot` 的 `full_page` | 未暴露 | **支持** | 既有功能，在新工具 `bsk_inspect(action="screenshot", full_page=True)` 中也已原生支持（能截整个长页面） |
-| 新 `screenshot` 是否把图片发给用户 | 会发 | **会发** | 新工具 `bsk_inspect` 改为 async generator，当 `action="screenshot"` 时先后 yield `event.image_result(path)` 与文字描述，图片直接发给用户；旧工具 `bsk_screenshot` 作为兼容保留 |
+| `full_page` 整页截图 | 未暴露 | **支持** | 既有功能，在新工具 `bsk_inspect(action="screenshot", full_page=True)` 中原生支持（能截整个长页面） |
+| 新 `screenshot` 是否把图片发给用户 | 会发 | **会发** | 新工具 `bsk_inspect` 为 async generator，当 `action="screenshot"` 时先后 yield `event.image_result(path)` 与文字描述，图片直接发给用户；原独立工具 `bsk_screenshot` 已彻底下线 |
 
 **反向说明（本插件比 DSH 弱、且短期内不打算补的）**：上面第 3 行属于功能性缺口；
 第 4 行属于展示层缺口，**不影响工具功能的等价性**。
@@ -663,10 +663,10 @@ self._journal_add(fresh)           # ← 永远执行不到
 | L1 单元测试 | `bsk/*` 纯逻辑：错误映射、VOM 解析、配置校验、截图魔数、会话状态机、框架超时读取与钳制、8 个主工具的 action 枚举与逐 action 参数校验 | ❌ | ❌ | `tests/test_*.py`（840 个用例，`unittest` 口径） |
 | L2 契约测试 | `main.py` 能被真实 AstrBot import、16 个工具注册成功、docstring schema 正确、硬约束（无 `__del__` 等）满足 | ✅ | ❌ | `verify_astrbot_contract.py` |
 | L3 服务层集成 | 真实调用 bsk：开→导航→读→截图→关，含并发与会话过期自动重建 | ✅ | ✅ | `verify_integration.py` |
-| L4 工具层端到端 | 直接 await `main.py` 里的工具函数，验证权限门、参数校验、异步生成器行为、异常包装 | ✅ | ✅ | `verify_tools_e2e.py`（6 个旧工具：`bsk_open/read/act/screenshot/close/status`）、`verify_logs_tool.py`（`bsk_logs`）、`verify_evaluate_gate.py`（`bsk_evaluate` 的权限三分支）、`verify_new_tools_real.py`（8 个新工具、57 个 action） |
+| L4 工具层端到端 | 直接 await `main.py` 里的工具函数，验证权限门、参数校验、异步生成器行为、异常包装 | ✅ | ✅ | `verify_tools_e2e.py`（旧工具与新 `bsk_inspect` 截图）、`verify_logs_tool.py`（`bsk_logs`）、`verify_evaluate_gate.py`（`bsk_evaluate` 的权限三分支）、`verify_new_tools_real.py`（8 个新工具、57 个 action） |
 
 **为什么必须有 L4**：L2 只证明工具"注册成功"，L3 只走到服务层。工具函数内部那层
-（URL 校验、权限判定、`bsk_screenshot` 的 async generator、异常是否被吞掉）
+（URL 校验、权限判定、`bsk_inspect` 的 async generator、异常是否被吞掉）
 只有 L4 能覆盖 —— 而那正是最容易出 bug、且出错时用户直接看到堆栈的地方。
 
 专项验证（各自针对一类"单元测试覆盖不到"的风险）：
@@ -759,7 +759,7 @@ AstrBot 解析数据路径时优先读该变量，否则普通模式下用当前
 | `observe` 无独立 title/url 字段 | 只能从 `RootWebArea "..."` 正则提取 | `bsk/pages.py` 负责解析 |
 | observe 视口 ≠ 截图像素 | 910x604 vs 1850x1208（DPR≈2） | 不要用 observe 坐标点截图位置 |
 | **全页截图耗时（关键数据，文档多处引用）** | 本机实测：短页面 `example.com` 视口截图 0.12s、全页截图 2.91s；长页面 Wikipedia 条目全页截图 11.72 / 11.11 / 10.91s（1820x11741，4.5MB） | ① 整页截图默认预算取 120s（约 10 倍余量），不是拍脑袋的 180s；② **"必须两处一起调大才能用整页截图"是错误说法** —— 实测只用了框架 120s 上限的约 1/10，默认配置下什么都不用改（该说法曾写在 README/ARCHITECTURE 里，已删除）；③ 真正要做的是钳制，别被框架从外面掐断（见 §5 D6） |
-| **框架超时是"每一步"的，不是"整个工具"的** | `astr_agent_tool_exec.py:691` 是 `await asyncio.wait_for(anext(wrapper), timeout=tool_call_timeout)` —— 包在每一次 `anext` 上 | async generator 若中途 yield，计时器会重置。`bsk_screenshot` 正是先 yield 图片再 yield 文本；但不要依赖这一点去绕过超时 —— 钳制仍是必需的，因为它同时保证了"超时由插件报中文"这件事 |
+| **框架超时是"每一步"的，不是"整个工具"的** | `astr_agent_tool_exec.py:691` 是 `await asyncio.wait_for(anext(wrapper), timeout=tool_call_timeout)` —— 包在每一次 `anext` 上 | async generator 若中途 yield，计时器会重置。`bsk_inspect`（action="screenshot"）正是先 yield 图片再 yield 文本；但不要依赖这一点去绕过超时 —— 钳制仍是必需的，因为它同时保证了"超时由插件报中文"这件事 |
 
 ### 6.3 logger 注入与数据落盘的守护测试
 
