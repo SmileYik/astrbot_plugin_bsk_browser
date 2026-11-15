@@ -3471,6 +3471,7 @@ INTERACT_SPECS: dict[str, _InteractSpec] = {
             ("delta_x", "--delta-x"),
             ("delta_y", "--delta-y"),
             ("modifiers", "--modifiers"),
+            ("observation_id", "--observation"),
         ),
         ms_flags=(("timeout_ms", "--timeout"),),
         readonly=True,
@@ -3522,7 +3523,11 @@ INTERACT_SPECS: dict[str, _InteractSpec] = {
     "press": _InteractSpec(
         argv=("press",),
         leading_positionals=("key",),
-        value_flags=(("target", "--ref"),),
+        value_flags=(
+            ("target", "--ref"),
+            ("modifiers", "--modifiers"),
+            ("observation_id", "--observation"),
+        ),
         ms_flags=(
             ("hold_ms", "--hold-ms"),
             ("timeout_ms", "--timeout"),
