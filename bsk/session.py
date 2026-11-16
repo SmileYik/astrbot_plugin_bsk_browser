@@ -1,51 +1,16 @@
 """bsk 会话生命周期管理。
 
-把 bsk 的"会话"（``session start`` / ``session stop``）封装成可按业务 key
-（通常是 umo，即一个聊天会话）隔离的、并发安全的对象池。
+将 bsk 的会话（session start / session stop）封装为按业务 key 隔离的并发安全对象池。
 
-本模块把下面这些实测确认的 bsk 语义全部消化掉，上层 ``service.py``
-不需要再关心任何一条：
+核心机制：
+1. 细粒度隔离：按 key 加锁，实现同一会话内命令严格串行化，不同会话并发执行；
+2. 失效自愈：遭遇 not_found（BskSessionGone）时自动重建会话并以新 id 重试一次；
+3. 瞬时退避：遭遇 session_busy 短暂重试，未知结果（outcome_unknown）直接上抛；
+4. 资源清理：支持空闲主动回收（reap_idle）与全量优雅停止（release_all）；
+5. 有界停止：session stop 支持有界重试与总预算兜底，防止阻塞插件终止；
+6. 孤儿恢复：结合 journal 持久化所有权记录与可恢复启动协议，在崩溃重启后精确回收遗留会话。
 
-1. ``session start --no-focus --browser <instance_id> --json`` 返回
-   ``{session_id, browser_instance_id, agent_window_id, interaction}``，
-   ``session_id`` 是 4 个小写字母（如 ``mnaa``）。
-2. ``session stop <SESSION_ID>`` 的 id 是位置参数，这是 bsk 里唯一的例外，
-   其余所有命令都是 ``--session <id>``。
-3. 绝不使用 ``bsk session stop --all`` —— 它会连带停掉别的程序
-   （例如用户自己的 DSH）创建的会话。这里只按精确 id 停自己的会话。
-4. 同一 session 严格串行：bsk 同时只允许 1 个 in-flight 命令，第二个并发命令
-   会返回 ``session_busy``。所以插件侧必须自己按 key 加锁（用一把全局锁会把
-   互不相干的聊天会话也串行化，白白拖慢）。
-5. session 空闲 5 分钟被 bsk 回收，而且回收不保证归还借用的标签页。
-   因此必须显式 stop（``reap_idle`` / ``release_all``），不能指望自动回收。
-6. 会话失效的表现是 ``not_found``（``BskSessionGone``）。正确策略是
-   用失败触发重建：操作失败且是 ``not_found`` 时才重建并重试一次，
-   不要每次操作前先探测（那是白白多一次往返）。
-7. ``session_busy`` 等一小会儿重试一次即可。
-8. ``outcome_unknown`` 类错误（扩展断连等）绝对不能重试 —— 动作可能已经生效，
-   直接向上抛出供调用方/Agent 自主判断。
-9. daemon 的生命周期独立于 AstrBot。AstrBot 被强杀时 ``terminate()`` 不会执行，
-   daemon 与那些会话却还活着 —— 用户桌面上就留下了没人管的浏览器窗口。
-   对策是 ``journal.py`` 的持久化所有权记录：建会话时落盘、正常 stop 后删掉、
-   下次 ``initialize()`` 时按记录精确回收（见 ``recover_orphans``）。
-10. ``session stop`` 会间歇性失败（实测 bsk 0.3.2 报
-    ``Background execution cleanup timed out``，此时会话其实还活着）。
-    因此 stop 走有界重试：只对瞬时故障最多试 ``STOP_MAX_ATTEMPTS`` 次，
-    且总耗时受预算约束 —— ``terminate()`` 绝不能被拖住。
-    分工：本次运行内的重试是第一道防线，journal + ``recover_orphans``
-    是第二道（下次启动时兜底）。
-
-设计约束（写代码时请勿破坏）：
-
-- 零第三方依赖，不 import astrbot，也不 import 内置 ``logging``；日志由
-  ``main.py`` 注入（见 ``bsk/logger.py``），未注入时走 ``NULL_LOGGER``，
-  可脱离框架单测；
-- 不自己起后台任务：空闲回收由 ``main.py`` 定时调用 ``reap_idle()``；
-- 时间戳一律用 ``time.monotonic()``（``time.time()`` 会被系统时钟跳变影响）；
-  例外是 journal 的 ``created_at``，那个要跨进程比较，必须用墙钟；
-- 清理路径（``release`` / ``release_all`` / ``close``）绝不抛异常，
-  否则会打断 ``terminate()``，留下无人回收的 Agent Window 打扰用户；
-- journal 是尽力而为的辅助机制：它的读写失败不能影响会话的正常创建/停止。
+设计约束：零第三方依赖，单调时钟计时，清理路径吞掉异常保证不阻塞上层生命周期。
 """
 
 from __future__ import annotations
@@ -114,171 +79,72 @@ __all__ = [
 ]
 
 
-# --- 可调常量（全部有实测依据，改动前请先想清楚） ---
+# --- 可调常量 ---
 
 BUSY_RETRY_DELAY_SEC = 0.1
-"""``session_busy`` 后的等待时长。bsk 的 in-flight 命令通常毫秒级结束。"""
+"""session_busy 后的重试等待时长（秒）。"""
 
 MAX_ATTEMPTS = 2
-"""一条命令最多执行几次。2 = 首次 + 重试一次，这是硬上限，别改成循环重试。"""
+"""命令最大执行次数（首次执行 + 最多重试 1 次）。"""
 
 DEFAULT_MAX_SESSIONS = 3
-"""未配置时的最大并发会话数（每个会话占一个 Agent Window，别开太多）。
-
-刻意与 ``config.py`` 的 ``DEFAULT_MAX_SESSIONS`` 保持一致：这里只是
-"配置对象缺这个字段"时的兜底，两边取值不同会变成很难查的行为漂移。
-"""
+"""默认最大并发会话数。与 config.py 保持一致。"""
 
 DEFAULT_IDLE_RELEASE_SEC = 240.0
-"""未配置时的空闲回收阈值。bsk 自己 5 分钟（300s）回收，我们取 4 分钟抢先一步，
-这样回收动作是我们主动做的，标签页归还有机会走完整流程。"""
+"""默认空闲回收阈值（秒）。早于 bsk 自身 5 分钟超时以主动归还标签页。"""
 
 DEFAULT_COMMAND_TIMEOUT_SEC = 60.0
-"""未配置时的默认命令超时（见 ARCHITECTURE §5 D6：必须小于框架的 120s 上限）。"""
+"""默认命令执行超时（秒）。"""
 
 START_TIMEOUT_FLOOR_SEC = 30.0
-"""``session start`` 的超时下限。首次 start 要等浏览器扩展连接，不能给太短。"""
+"""session start 最小超时下限（秒），预留浏览器扩展连接时间。"""
 
 STOP_TIMEOUT_SEC = 15.0
-"""``session stop`` 单次尝试的超时。stop 要等浏览器归还标签页，但也不能无限等。
-
-首次尝试总是拿满它（除非总预算已经不够，见 ``STOP_RETRY_BUDGET_SEC``）。
-"""
+"""session stop 单次尝试超时（秒）。"""
 
 STOP_MAX_ATTEMPTS = 3
-"""``session stop`` 最多尝试几次（含首次）。硬上限，别改成无限循环。
-
-为什么是 3 而不是 2：实测 bsk 0.3.2 在"曾经有 navigate 失败过"的会话上会间歇性
-报 ``Background execution cleanup timed out``（此时会话其实还活着），而
-紧接一次重试就能成功 —— 说明是瞬时状态。给两次重试机会是为了覆盖
-"连续两次都撞上同一个瞬时窗口"这种低概率情形，同时仍把最坏耗时钉死。
-"""
+"""session stop 最大尝试次数（含首次）。覆盖瞬时 cleanup 异常。"""
 
 STOP_RETRY_DELAY_SEC = 0.5
-"""两次 ``session stop`` 之间的固定等待时长（秒）。
-
-固定而不是递增：实测瞬时窗口极短（紧接一次重试即成功），递增带来的额外等待
-只会拖长 ``terminate()``，换不来更高的成功率。
-"""
+"""session stop 重试间隔时长（秒）。"""
 
 STOP_RETRY_BUDGET_SEC = 5.0
-"""``_stop_session_id`` 额外留给重试的时间预算（秒）。
-
-它与前两项一起构成整次调用的总时间上限（见 ``STOP_TOTAL_BUDGET_SEC``）：
-
-    总上限 = STOP_TIMEOUT_SEC + STOP_ATTEMPT_OVERHEAD_SEC + STOP_RETRY_BUDGET_SEC
-           = 15 + 17 + 5 = 37 秒
-
-前两项覆盖"首次尝试的正常最坏耗时"（bsk 真的卡满 15 秒超时，再加 runner 自己的
-优雅取消与收管道），不做任何削减 —— 否则等于把 runner 的清理流程掐断，
-反而更可能留下一个 bsk 子进程。这一项是额外多给的，专门用来重试。
-
-为什么这 5 秒给得起：实测那条 ``cleanup timed out`` 是毫秒级快速失败，
-根本用不到 15 秒超时，所以重试实际只花几十毫秒 —— 5 秒是几百倍的余量；
-而它换来的是"不再泄漏一个用户桌面上的浏览器窗口"。
-"""
+"""session stop 重试阶段额外时间预算（秒）。"""
 
 STOP_RETRY_MIN_TIMEOUT_SEC = 1.0
-"""一次尝试至少要有这么多剩余预算才值得发。
-
-只剩 0.2 秒预算的 stop 几乎必然超时，发了也只是白花时间、白记一条错误。
-低于这个值就直接放弃（计 ``stop_retry_budget_skips``）。
-"""
+"""单次 stop 尝试的最低预算门槛（秒）。低于此阈值直接放弃重试。"""
 
 STOP_ATTEMPT_OVERHEAD_SEC = DEFAULT_CANCEL_GRACE_SEC + DRAIN_TIMEOUT_SEC
-"""单次 stop 在超时之后还可能多花的时间：runner 的优雅取消费 + 收管道。
-
-``BskRunner.run`` 的内部最坏耗时是 ``timeout + cancel_grace + DRAIN_TIMEOUT_SEC``
-（超时后先关 stdin 给 15 秒宽限，再 kill，然后有界地收管道 —— 见 ``runner.py``）。
-本模块把这个开销显式计入自己的墙钟上界，否则"上界"就是假的。
-"""
+"""单次 stop 超时后的清理开销（秒，包含优雅取消与管道收尾）。"""
 
 STOP_TOTAL_BUDGET_SEC = (
     STOP_TIMEOUT_SEC + STOP_ATTEMPT_OVERHEAD_SEC + STOP_RETRY_BUDGET_SEC
 )
-"""``_stop_session_id`` 整次调用的墙钟总上限（秒）= 15 + 17 + 5 = 37。
-
-这是唯一的截止时刻，所有尝试与等待都从它反推剩余额度：
-
-- 每次尝试的超时 = ``min(单次上限, 剩余)``；
-- 每次尝试的兜底 = ``clamp(兜底上限, 尝试超时, 剩余)``；
-- 每次重试前的等待 = ``min(重试延迟, 剩余)``；剩余不够就不发。
-
-于是"整次调用不会越过这个上限"可以逐条推出来，而不是靠各处常量互相心算。
-超了就放弃并记 ``stop_failed`` —— 绝不能把 ``terminate()`` 挂住。
-"""
+"""session stop 调用的绝对墙钟总上限（秒 = 15 + 17 + 5 = 37s），防止阻塞 terminate。"""
 
 STOP_ATTEMPT_BACKSTOP_MARGIN_SEC = 5.0
-"""墙钟兜底计时器的额外余量（秒），刻意给得宽松。
-
-兜底值 = ``timeout + overhead + 本余量``，比 ``BskRunner`` 的理论最坏耗时再多 5 秒，
-用来吸收它没算进那两个常量的开销（创建子进程、Windows 上杀软扫描 bsk.exe、
-负载高时的调度延迟）。
-
-为什么宁大勿小：兜底触发时会 ``cancel`` 掉正在执行的 ``BskRunner.run``，而那是
-可能留下一个 bsk 子进程的操作。所以它的定位是"runner 彻底失控时的最后一道
-保险丝"，而不是常规控制流 —— 正常路径永远不该碰到它。
-（同理，它一旦触发，我们会把它翻译成 ``BskTimeout`` 并照常重试，而不是直接放弃。）
-"""
+"""单次 stop 兜底计时器余量（秒）。"""
 
 STOP_TRANSIENT_ERROR_MARKERS: tuple[str, ...] = (
-    # ↓↓ 实测原文（bsk 0.3.2）：
-    # extension rejected tool.session_stop: RpcError {
-    #     code: ProtocolError, message: "Background execution cleanup timed out" }
-    # 此时会话仍然活着（Agent Window 还开着），而紧接一次重试就能成功。
     "background execution cleanup",
     "cleanup timed out",
-    # bsk 侧 RPC 层的报错外壳。注意与 ``BskProtocolError``（那个是我们发错命令
-    # 或输出不是 JSON）区分开：这里匹配的是错误文本里的 bsk 内部标记。
     "rpcerror",
     "protocolerror",
-    # 扩展拒绝了这次 stop：可能是瞬时状态（清理还没收尾），也可能是权限。
-    # 宁可多花一秒重试，也不要漏掉一次可以救回来的停止（漏掉 = 用户桌面留一个窗口）。
     "extension rejected",
-    # 理论上会先被 errors.classify 归成 BskSessionBusy，这里只是文本兜底。
     "session_busy",
 )
-"""错误文本里出现任意一项，就认为 stop 失败是瞬时的、值得重试。
-
-为什么按文本而不是按异常类型判定：实测那个失败在插件侧是
-``BskError``（甚至可能是 ``BskProtocolError``），与"我们自己参数写错"完全同类，
-按类型一刀切会把这条唯一有实测证据的瞬时故障一起排除掉。
-反过来说，类型只用来认那些与文本无关的瞬时类别（超时、忙）。
-"""
+"""判定 session stop 瞬时故障的文本标记元组。"""
 
 
 def _is_transient_stop_error(exc: BaseException) -> bool:
-    """这次 ``session stop`` 失败是否值得重试。
+    """判定 session stop 失败是否属于瞬时故障可安全重试。
 
-    判定依据（按优先级）：
-
-    1. 明确不可重试的类别直接否掉 —— ``BskNotInstalled``（bsk 没装）、
-       ``BskVersionError``（CLI 与扩展版本对不上）：这两类重试多少次结果都一样，
-       只会白等。它们放在最前面是为了防止"错误文本里恰好含某个标记"导致误判。
-    2. ``outcome_unknown`` 类错误不重试 —— 这是本模块的铁律（见 ``errors.py`` 的
-       ``OUTCOME_UNKNOWN_REASONS``）。stop 本身是幂等的、重试其实安全，但这里刻意
-       不开这个口子：一旦给"结果未知"开了重试，将来很容易被照着抄到 click/fill
-       这类重放会出事的动作命令上。这类失败的兜底手段是 journal + 下次启动的
-       ``recover_orphans``。
-    3. 文本含 ``STOP_TRANSIENT_ERROR_MARKERS`` 之一 → 是瞬时故障，重试。
-       这是实测那条 ``Background execution cleanup timed out`` 的判定路径。
-    4. 类型本身就是瞬时类别 → 重试：``BskTimeout``（超时；stop 幂等，重放安全）、
-       ``BskSessionBusy``（会话上有 in-flight 命令，等一小会儿再来）。
-    5. 其余一律不重试（包括没有瞬时标记的 ``BskProtocolError``、``BskBrowserError``、
-       普通 ``BskError``、以及任何非 bsk 异常）。宁可少试一次，也不要把
-       ``terminate()`` 的时间浪费在注定失败的重试上。
-
-    Note:
-        重试 stop 是安全的：如果会话其实已经停了，bsk 会回 ``not_found``，
-        而 ``_stop_session_id`` 已经把 ``not_found`` 当成"目的已达成"的成功处理。
-        所以"多停一次"最多多花一次往返，不会误判、也不会伤到别人的会话
-        （命令里带的是精确 id，绝不是 ``--all``）。
-
-    Args:
-        exc: ``run_or_raise`` 抛出的异常（也可能是任何别的异常）。
-
-    Returns:
-        True 表示应当重试。
+    判定规则：
+    1. 不可重试类型否决：BskNotInstalled、BskVersionError；
+    2. outcome_unknown 错误不重试（由 journal 与孤儿回收兜底）；
+    3. 匹配 STOP_TRANSIENT_ERROR_MARKERS 文本标记则重试；
+    4. BskTimeout 或 BskSessionBusy 类型重试；
+    5. 其他异常不重试。
     """
     if isinstance(exc, (BskNotInstalled, BskVersionError)):
         return False
@@ -296,76 +162,52 @@ def _is_transient_stop_error(exc: BaseException) -> bool:
 
 
 RECOVER_LIST_TIMEOUT_SEC = 5.0
-"""恢复时 ``session list`` 的超时。
-
-实测这条命令 0.02-0.03 秒返回，5 秒是 100 倍余量；而它跑在插件启动路径上，
-不能让用户对着一个卡住的 daemon 干等（超时也只是退化成"清掉记录"）。
-"""
+"""恢复时 session list 的超时（秒）。"""
 
 
 # --- 可恢复启动（request_id 协议）---
-#
-# 要修的缺陷（实测确认）：``session start`` 超时会让窗口成为永久孤儿。
-#
-#     fresh = await self._start(...)     # ← 超时在这里抛异常
-#     self._journal_add(fresh)           # ← 永远执行不到
-#
-# 窗口可能已经开出来了，但调用方拿不到 session_id，于是 journal 里没有任何
-# 记录，``recover_orphans()`` 也够不着它 —— 用户桌面上留下一个既关不掉、
-# 也清理不掉的浏览器窗口。
-#
-# 对策：在**发出 start 之前**先落盘一个令牌，再让 daemon 认下这个令牌；
-# 之后无论 start 的回执是超时、断连还是别的什么，都能凭令牌把那次启动
-# 造出来的会话找回来（cancel 掉）。
-#
-# 实测（本机 bsk 0.3.2，真实 daemon）确认的四条语义：
-#
-# 1. ``session request <令牌> --help`` → exit 0，输出含 ``--prepare``；
-# 2. ``--prepare`` → ``{"state": "prepared", "session": null, ...}``，**不开窗口**；
-# 3. 未 prepare 过的令牌查询 → ``{"state": "unknown"}``，exit 0；
-# 4. ``--cancel`` → ``{"state": "closed", "cleanup_error": null}``；
-#    对不存在的令牌 ``--claim`` → exit 1 + ``code="not_found"``。
+# 在发出 start 前先持久化令牌，即便启动回执丢失也能凭令牌向 daemon 取消孤儿窗口。
 
 REQUEST_TOKEN_TTL_SEC = 300.0
-"""令牌有效期下限（秒）。实测只需覆盖 3 次往返（每次约 40ms），5 分钟有 100 倍余量。"""
+"""令牌有效期下限（秒）。"""
 
 REQUEST_TOKEN_TTL_MAX_SEC = 540.0
-"""令牌有效期上限（秒）。bsk 只接受 10 分钟内的墓碑，留 1 分钟余量。"""
+"""令牌有效期上限（秒）。"""
 
 REQUEST_TOKEN_TTL_MARGIN_SEC = 60.0
-"""有效期 = max(下限, 2 × 启动超时 + 这个余量)，再钳到上限。"""
+"""令牌有效期时间余量（秒）。"""
 
 REQUEST_PROBE_TIMEOUT_SEC = 10.0
-"""能力探测（``session request --help``）的超时。实测 40~160ms，10 秒是防呆。"""
+"""可恢复启动能力探测超时（秒）。"""
 
 REQUEST_PROTOCOL_TIMEOUT_SEC = 30.0
-"""prepare / claim / cancel / query 各自的超时。它们不建窗口、不导航，只改 daemon 侧记账。"""
+"""prepare / claim / cancel / query 协议命令超时（秒）。"""
 
 REQUEST_STATE_PREPARED = "prepared"
-"""令牌已预约，窗口还没建出来（实测 ``--prepare`` 返回 ``session: null``）。"""
+"""令牌已预约，窗口尚未创建。"""
 
 REQUEST_STATE_READY = "ready"
-"""bsk 已受理这次启动，窗口正在建。"""
+"""bsk 已受理启动请求，正在创建窗口。"""
 
 REQUEST_STATE_ACTIVE = "active"
-"""窗口已建出来并被认领（``--claim`` 之后的状态）。"""
+"""窗口已建立并成功认领。"""
 
 REQUEST_STATE_CLOSED = "closed"
-"""窗口确定不在了（``--cancel`` 成功后的墓碑）。"""
+"""启动已取消，窗口已关闭。"""
 
 REQUEST_STATE_CANCELLING = "cancelling"
-"""取消正在进行中，窗口可能还在。"""
+"""启动正在取消中。"""
 
 LIVE_REQUEST_STATES = frozenset({
     REQUEST_STATE_PREPARED, REQUEST_STATE_READY, REQUEST_STATE_ACTIVE, REQUEST_STATE_CANCELLING,
 })
-"""这些状态意味着「daemon 那边可能真有个窗口」，值得去 cancel。"""
+"""代表后台可能存在对应窗口的活动状态集。"""
 
 TERMINAL_REQUEST_STATES = frozenset({REQUEST_STATE_CLOSED, "failed"})
-"""终态墓碑：窗口确定不在了，记录可以直接删。"""
+"""代表窗口已确认不存在的终态集。"""
 
 REQUEST_TOKEN_RE = re.compile(r"^\d+:[0-9a-f-]{36}$")
-"""令牌格式（实测）：``<到期-unix-毫秒>:<UUID>``。"""
+"""令牌格式正则：<到期-unix-毫秒>:<UUID>。"""
 
 
 def _cancelled_from(exc: BaseException) -> BskStartCancelled:
@@ -486,67 +328,33 @@ def _coerce_probe_result(value: Any) -> str:
 
 @dataclass(slots=True)
 class _Entry:
-    """一个 key 对应的会话槽位。
-
-    锁和会话是分开的两件事：会话重建后 ``session`` 会换内容，
-    但 ``lock`` 必须始终是同一把 —— 否则重建窗口里会漏进并发命令。
-    """
+    """会话槽位，包含会话实例、互斥锁及活跃状态。"""
 
     key: str
     session: BskSession
     lock: asyncio.Lock
     last_used: float
-    """``time.monotonic()`` 时间戳，LRU 淘汰与空闲回收都用它。"""
-
     seq: int = 0
-    """创建序号。``last_used`` 相同时用它做稳定的次级排序键。"""
-
     closed: bool = False
-    """为 True 表示这个槽位已从管理器中摘除（正在/已经被 stop）。
-
-    在这之后绝不允许再用它重建会话，否则会造出一个无人管理的僵尸会话。
-    """
 
 
 class SessionManager:
     """按 key 管理 bsk 会话的并发安全对象池。
 
     Args:
-        runner: 子进程执行器。只用到 ``run_or_raise``。
-        settings: 插件配置（``bsk/config.py`` 的 ``Settings``，或任何同名属性的对象）。
-            只读这四个字段，且都用 ``getattr`` 兜底：
-            ``max_sessions`` / ``idle_release_sec`` / ``browser_instance_id`` /
-            ``command_timeout_sec``。
-        browser_probe: 可选。当 ``settings.browser_instance_id`` 为空时，用它
-            探测一个可用浏览器（``bsk browsers`` 的薄封装）。探测失败就退化成
-            不传 ``--browser``，让 bsk 用默认浏览器。
-        journal: 可选的持久化所有权记录（``bsk/journal.py``）。传了它，
-            每建一个会话就落盘、每正常停一个就删记录，从而使
-            :meth:`recover_orphans` 能在下一个进程里认出遗留会话。
-            不传（None）时所有 journal 动作都变成无操作 —— 现有调用方
-            与测试因此完全不受影响。
-        stop_max_attempts: ``session stop`` 的最多尝试次数（含首次）。
-            默认取模块常量 ``STOP_MAX_ATTEMPTS``。抽成参数只为测试能把
-            次数与延迟调小，避免每个用例真的 sleep 半秒；生产代码不要传它。
-        stop_retry_delay_sec: 两次 stop 之间的等待时长。默认 ``STOP_RETRY_DELAY_SEC``。
-        stop_retry_budget_sec: 重试阶段的墙钟总预算。默认 ``STOP_RETRY_BUDGET_SEC``。
-        stop_timeout_sec: 单次 stop 的超时。默认 ``STOP_TIMEOUT_SEC``。
-        stop_total_budget_sec: 整次 ``_stop_session_id`` 的墙钟总上限。
-            ``None``（默认）时按
-            ``stop_timeout_sec + stop_attempt_overhead_sec + stop_retry_budget_sec``
-            推导（生产值 37 秒），保证"首次尝试的正常最坏耗时"不被削减。
-        stop_attempt_overhead_sec: 单次尝试超时之后 runner 还要花的清理时间。
-            默认 ``STOP_ATTEMPT_OVERHEAD_SEC``（= 优雅取消宽限 + 收管道，17 秒）。
-            测试用假 runner 时把它调成 0，因为假 runner 不做真实清理。
-        stop_attempt_backstop_sec: 单次尝试的硬性墙钟兜底上限。``None``（默认）时
-            按 ``stop_timeout_sec + 本开销 + 余量`` 自动推导。
-            抽成参数同样只为测试能把兜底调小，不必真的等 30 秒。
-
-    Attributes:
-        _clock: ``time.monotonic`` 的接缝，单元测试可替换成假时钟来验证
-            LRU 与空闲回收，避免测试里真的 sleep。生产代码不要动它。
-            ⚠️ stop 的重试预算不用它（假时钟不会自己走，会把预算变成永不
-            到期）；见 ``_stop_session_id`` 里的说明。
+        runner: 子进程执行器。
+        settings: 插件配置对象。
+        cli: 可选的 BskCli 实例。
+        browser_probe: 可选的浏览器实例探测器。
+        journal: 可选的持久化会话日记账（用于跨进程孤儿回收）。
+        stop_max_attempts: 停止会话最大重试次数。
+        stop_retry_delay_sec: 停止重试间隔秒数。
+        stop_retry_budget_sec: 停止重试总时间预算。
+        stop_timeout_sec: 单次停止命令超时秒数。
+        stop_total_budget_sec: 停止操作总时间上限。
+        stop_attempt_overhead_sec: 单次尝试超时后的清理开销预估。
+        stop_attempt_backstop_sec: 单次尝试的硬性墙钟兜底上限。
+        logger: 可选日志器。
     """
 
     def __init__(
@@ -581,9 +389,7 @@ class SessionManager:
         self._journal = journal
         self._logger = logger or NULL_LOGGER
 
-        # stop 重试的可调参数。只给测试用：生产路径一律用模块常量的默认值。
-        # 非法值（<=0、非数字）一律回退到常量，避免调用方传 0 导致
-        # "预算为 0 → 永远不重试"或"次数为 0 → 一次都不试"这种静默失效。
+        # 初始化 stop 重试参数，防御性校验并回退非法值
         attempts = _as_int(stop_max_attempts, STOP_MAX_ATTEMPTS)
         self._stop_max_attempts = attempts if attempts >= 1 else STOP_MAX_ATTEMPTS
         delay = _as_float(stop_retry_delay_sec, STOP_RETRY_DELAY_SEC)
@@ -592,15 +398,10 @@ class SessionManager:
         self._stop_retry_budget_sec = budget if budget > 0 else STOP_RETRY_BUDGET_SEC
         timeout = _as_float(stop_timeout_sec, STOP_TIMEOUT_SEC)
         self._stop_timeout_sec = timeout if timeout > 0 else STOP_TIMEOUT_SEC
-        # runner 超时后的清理开销：生产用 runner.py 的真实常量（17s），
-        # 测试用假 runner 时传 0（假 runner 不做任何真实清理）。
         overhead = _as_float(stop_attempt_overhead_sec, STOP_ATTEMPT_OVERHEAD_SEC)
         self._stop_attempt_overhead_sec = (
             overhead if overhead >= 0 else STOP_ATTEMPT_OVERHEAD_SEC
         )
-        # 整次调用的总上限：显式传值就用它（测试用），否则按"首次尝试的正常最坏
-        # 耗时 + 重试预算"推导。首次那一份不做削减，否则等于掐断 runner 的
-        # 清理流程（见 STOP_RETRY_BUDGET_SEC 的说明）。
         if stop_total_budget_sec is None:
             self._stop_total_budget_sec = (
                 self._stop_timeout_sec
@@ -612,7 +413,6 @@ class SessionManager:
             self._stop_total_budget_sec = (
                 total if total > 0 else self._stop_timeout_sec
             )
-        # 墙钟兜底：显式传值就用它（测试用），否则按 runner 的理论最坏耗时推导。
         if stop_attempt_backstop_sec is None:
             self._stop_attempt_backstop_sec = (
                 self._stop_timeout_sec
@@ -624,7 +424,6 @@ class SessionManager:
             self._stop_attempt_backstop_sec = (
                 backstop if backstop > 0 else self._stop_timeout_sec
             )
-        # 兜底永远不该晚于总预算生效：否则"总耗时有界"就不再成立。
         self._stop_attempt_backstop_sec = min(
             self._stop_attempt_backstop_sec, self._stop_total_budget_sec
         )
@@ -638,8 +437,6 @@ class SessionManager:
             DEFAULT_IDLE_RELEASE_SEC,
         )
         self._idle_release_sec = idle
-        """<= 0 表示关闭自动回收（用户显式选择），而不是"立刻全回收"。"""
-
         self._browser_instance_id = _as_str(
             _setting(settings, "browser_instance_id", "")
         )
@@ -651,13 +448,7 @@ class SessionManager:
             self._command_timeout = DEFAULT_COMMAND_TIMEOUT_SEC
         self._start_timeout = max(START_TIMEOUT_FLOOR_SEC, self._command_timeout)
 
-        # 可恢复启动（request_id 协议）。两个字段一起决定"这次要不要带令牌建会话"：
-        #
-        #   _enable_request_id：用户配置。关掉它 = 完全回到旧行为（少两条命令）。
-        #   _request_protocol：能力探测结果，**每进程只探一次**（None = 还没探）。
-        #
-        # 拆成两个是有意的：配置关掉与 bsk 不支持都会退回旧行为，但原因不同，
-        # 日志与计数器也必须能区分开（排查"为什么没有可恢复启动"时全靠它）。
+        # 可恢复启动配置与协议支持状态
         self._enable_request_id = bool(
             _setting(settings, "enable_request_id", True)
         )
@@ -665,8 +456,6 @@ class SessionManager:
 
         self._entries: dict[str, _Entry] = {}
         self._registry_lock = asyncio.Lock()
-        """只保护 ``_entries`` 字典的增删（内部不含长 await），
-        与 per-key 的会话锁是两把不同的锁，别混用。"""
 
         self._seq = 0
         self._closed = False
@@ -681,27 +470,11 @@ class SessionManager:
             "evicted": 0,
             "reaped": 0,
             "not_found_rebuilds": 0,
-            # --- stop 重试的可观测性（见 _stop_session_id）---
-            #
-            # stop_retries：实际发生的 stop 重试次数（不含首次尝试）。
-            #     用来诊断"瞬时故障有多常见"。
-            # stop_recovered：靠重试才停成功的次数。这是本次修复直接救回来的
-            #     会话数 —— 它 > 0 就说明旧代码会在这里泄漏一个浏览器窗口。
-            # stop_retry_budget_skips：因重试预算耗尽而主动放弃剩余重试的次数
-            #     （不是失败，是止损）。
+            # stop 重试指标
             "stop_retries": 0,
             "stop_recovered": 0,
             "stop_retry_budget_skips": 0,
-            # --- 可恢复启动的可观测性（见 _start_into / _recover_by_request）---
-            #
-            # request_protocol_unsupported：bsk 不支持 session request（老版本）。
-            # request_protocol_disabled：用户把 enable_request_id 关掉了。
-            #     上面两个都只是"退回旧行为"，不是错误。
-            # request_write_ahead_failed：令牌写不进 journal → 这次不带令牌启动。
-            # request_start_failed：带着令牌的 start 失败了（回执丢失的高危时刻）。
-            # request_cancelled：start 被 bsk 回复 cancelled（刻意抑制，不重试）。
-            # request_claim_failed：start 成功但 claim 失败。
-            # request_orphans_cancelled：recover_orphans 里靠令牌回收掉的遗留请求。
+            # 可恢复启动指标
             "request_protocol_unsupported": 0,
             "request_protocol_disabled": 0,
             "request_write_ahead_failed": 0,
@@ -717,28 +490,16 @@ class SessionManager:
     # ------------------------------------------------------------------
 
     async def acquire(self, key: str, *, start_args: Sequence[str] = ()) -> BskSession:
-        """获取（必要时创建）某个 key 的会话。
+        """获取（必要时创建）指定 key 的会话。
 
-        同一 key 并发调用只会 ``start`` 一次（其余协程等待并复用），
-        返回的也是同一个对象。
+        同一 key 并发调用共享同一会话实例。
 
         Args:
             key: 会话键。
-            start_args: 仅在该 key **需要新建会话**时，追加到 ``session start``
-                后面的额外参数（如 ``--width``/``--height``）。
-                **已有会话时完全忽略** —— 窗口尺寸只在建会话那一刻有意义。
+            start_args: 仅新建会话时追加到 ``session start`` 的参数（如窗口尺寸）。已有会话时忽略。
 
-        Note:
-            返回值主要用于读取 ``session_id`` / ``agent_window_id``。
-            真正的命令执行请走 ``execute()`` 或 ``execute_action()``。
-
-        Note:
-            ``start_args`` 是**按调用栈传递**的普通参数，不是任何形式的全局/
-            实例状态：并发地给不同 key 建会话时，各自的参数只落在各自那条
-            ``session start`` 上，绝无串味。同时，会话失效后的自动重建
-            （``_restart`` → ``_start_into``）**不带** ``start_args`` ——
-            重建是为了把会话恢复回来，不是为了改窗口尺寸；把一个过期的
-            尺寸参数重放到重建命令上，只会让"恢复"变成一次意外的改尺寸。
+        Returns:
+            BskSession 实例。
         """
         self._ensure_open()
         extra = tuple(str(item) for item in start_args)
@@ -897,19 +658,12 @@ class SessionManager:
         )
 
     async def release(self, key: str) -> bool:
-        """显式关闭并移除某个 key 的会话。
+        """显式关闭并移除指定 key 的会话。绝不抛异常。
 
-        会先等在飞的命令结束（最多 ``RELEASE_WAIT_SEC`` 秒），再发
-        ``session stop <id>``（位置参数，唯一例外，绝不用 ``--all``）。
+        等待进行中的命令结束后调用 ``session stop <id>``。
 
         Returns:
-            True 表示这个 key 原本有会话，且已确认在 bsk 侧不再存活
-            （显式 stop 成功，或 bsk 回 ``not_found`` 说明早已被回收）。
-            False 表示原本就没有会话记录，或 stop 因其他原因失败 ——
-            无论哪种，本地记录都已删除，stop 失败原因见 ``stats()``。
-
-        Note:
-            本方法不会抛异常（terminate 路径不能被它打断）。
+            True 表示会话已确认停止；False 表示不存在或停止失败。
         """
         entry = self._entries.pop(key, None)
         if entry is None:
@@ -930,23 +684,7 @@ class SessionManager:
             return False
 
     async def release_all(self) -> int:
-        """关闭所有会话，返回成功关闭的数量。``terminate()`` 用。
-
-        先一次性把本地记录全部摘除（只做同步操作，不给并发留窗口），
-        再并发 stop。任何一个 stop 失败都不影响其他会话的清理，也不会抛异常。
-
-        时间上界（``terminate()`` 绝不能被拖住，这是硬要求）：
-        :meth:`_shutdown_entries` 用 ``asyncio.gather`` 并发停所有会话，
-        所以总耗时 ≈ 单个会话的最坏耗时，而不是会话数 × 单次耗时。
-        单个会话的最坏耗时又有明确上界：
-
-            RELEASE_WAIT_SEC（等在飞命令，5s）
-          + STOP_TIMEOUT_SEC + STOP_RETRY_BUDGET_SEC（stop 含重试，15 + 5s）
-
-        这个上界不随会话数增长。相比加重试之前（单个会话 5 + 15s），
-        这里多出的只有 5 秒重试预算 —— 换来的是"不再泄漏用户桌面上的浏览器窗口"，
-        而实测那条瞬时故障是毫秒级返回的，实际上根本用不到这 5 秒。
-        """
+        """并发关闭所有会话，返回成功关闭的数量。绝不抛异常。"""
         entries: list[_Entry] = []
         for key in list(self._entries.keys()):
             entry = self._entries.pop(key, None)
@@ -958,15 +696,7 @@ class SessionManager:
         return await self._shutdown_entries(entries)
 
     async def reap_idle(self) -> int:
-        """回收空闲超时的会话，返回回收数量。由 ``main.py`` 的后台任务定期调用。
-
-        判定用 ``self._clock() - entry.last_used >= idle_release_sec``。
-        正在执行命令的会话（锁被持有）不算空闲，跳过不回收 —— 否则会打断
-        一个正在跑的长命令（例如全页截图）。
-
-        Note:
-            ``idle_release_sec <= 0`` 表示用户关闭了自动回收，直接返回 0。
-        """
+        """回收空闲超时的会话，返回回收数量。正在执行命令的会话跳过。"""
         if self._idle_release_sec <= 0 or not self._entries:
             return 0
 
@@ -1002,38 +732,15 @@ class SessionManager:
         return count
 
     async def recover_orphans(self) -> int:
-        """清理上一次进程遗留的、仍然活着的自己的会话。
+        """清理上一进程遗留的会话与启动请求。绝不抛异常。
 
-        场景：AstrBot 被强杀（任务管理器结束进程 / 崩溃 / 断电）时 ``terminate()``
-        不会执行，而 bsk daemon 的生命周期独立于 AstrBot —— 它和那些会话都还活着，
-        用户桌面上于是留着没人管的浏览器窗口。本方法在下次 ``initialize()`` 时
-        按 journal 里的记录把它们收干净。
-
-        算法（每一步都是"只停自己的"）：
-
-        1. 读 journal；空就直接返回 0（绝大多数启动走这条路，零额外开销）；
-        2. ``bsk session list --json`` 拿当前活着的会话；
-        3. 逐条比对：``session_id`` 与 ``agent_window_id`` 都匹配才停；
-        4. 清空 journal。
-
-        绝不用 ``bsk session stop --all``：那会连带停掉别的程序
-        （用户自己的 DSH、他们的另一个 AI 工具）创建的会话。这里只按精确 id 停。
-
-        为什么要比对 ``agent_window_id``：``session_id`` 只有 4 个小写字母
-        （26^4 ≈ 45.7 万空间），存在碰撞可能 —— 我们记录的 ``mnaa`` 已经过期，
-        之后另一个程序也建了一个 ``mnaa``。此时仅凭 session_id 匹配就会误停别人的
-        会话。``agent_window_id`` 是另一扇窗口的编号，数值空间大得多，两者同时
-        相同才足以认定"这就是我们上次留下的那个"。
-
-        Note:
-            - 绝不抛异常：它在插件启动路径上跑，抛异常会让插件加载失败；
-            - daemon 没在跑（``session list`` 失败）时不算错误：daemon 都没了，
-              会话自然也没了，直接清空 journal 即可；
-            - 停不掉某条会话时不阻止 journal 清空 —— 下一次启动还会再试一次
-              也没有意义（那条记录对应的进程已经死了，反复重试只会拖慢启动）。
+        流程：
+        1. 按启动令牌回收未认领的启动请求；
+        2. 查询 live 会话，双重校验 session_id 与 agent_window_id 确认归属；
+        3. 按精确 id 停止遗留会话并清理 journal。
 
         Returns:
-            实际清理掉的会话数量。
+            清理掉的遗留会话与请求总数。
         """
         journal = self._journal
         if journal is None:
@@ -1049,16 +756,13 @@ class SessionManager:
         if not recorded:
             return 0
 
-        # --- 第一轮：按令牌回收（老路径结构上覆盖不到的那一类）---
-        # 必须在 _list_live_sessions() 之前：只有令牌、没有 session_id 的记录
-        # 靠下面的 session_id 比对永远匹配不上。
+        # 按令牌回收未认领请求
         recorded, token_stopped = await self._recover_by_request(recorded)
 
-        # --- 问 daemon 现在有哪些会话 ---
+        # 获取当前 live 会话列表
         try:
             live = await self._list_live_sessions()
         except Exception as exc:  # noqa: BLE001
-            # 包括"daemon 没在跑"：那不是错误，会话自然也随着 daemon 一起没了。
             self._logger.debug("session list 失败，跳过孤儿会话恢复：%r", exc)
             live = None
 
@@ -1066,16 +770,12 @@ class SessionManager:
             self._journal_clear()
             return token_stopped
 
-        # --- 逐条比对，只停自己的 ---
+        # 逐条比对精确停止，跳过不属于本进程的会话
         stopped = token_stopped
         skipped = 0
         for entry in recorded:
             matches = live.get(entry.session_id)
             if matches is None or entry.agent_window_id not in matches:
-                # 两种情况都跳过：
-                #   - bsk 里已经没有这个 id（会话早被回收/正常停掉了）；
-                #   - 有这个 id，但 agent_window_id 对不上 —— 那是别人的会话，
-                #     只是恰好撞了 id。绝不能停。
                 skipped += 1
                 self._logger.debug(
                     "跳过遗留会话 %s（agent_window_id=%s）：daemon 侧不匹配",
@@ -1099,8 +799,6 @@ class SessionManager:
                 stopped,
                 skipped,
             )
-        # 无论停成功几个都清空：这些记录属于已经退出的进程，
-        # 留着只会让每次启动都重复做同一轮无用功。
         self._journal_clear()
         self._logger.debug(
             "[孤儿清理完成] 共清理 %d 个遗留会话与请求 | 当前会话槽位: %d",
@@ -1112,30 +810,14 @@ class SessionManager:
     async def _recover_by_request(
         self, recorded: list[JournalEntry]
     ) -> tuple[list[JournalEntry], int]:
-        """按令牌回收上一轮留下的请求，返回（仍需走老路径的记录，已停掉的数量）。
+        """按令牌回收上一进程遗留的启动请求。绝不抛异常。
 
-        覆盖老路径**结构上覆盖不到**的那一类：上次进程连 session_id 都没收到
-        （journal 里只有令牌、session_id 为空）—— 那种记录靠 session_id 比对
-        永远匹配不上，只能凭令牌去问 daemon。
-
-        每个分支的取舍：
-
-        - 问不到（``None``）→ 保留：daemon 没跑/超时/输出不是 JSON 都只是
-          "我们不知道"，不知道就不能删记录；
-        - 活着（``LIVE_REQUEST_STATES``）→ 去 cancel。**只有确认关掉了**
-          （``_cancel_request`` 返回 True）才删记录并计数；没确认就保留，
-          留给下次启动重试；
-        - 终态（``TERMINAL_REQUEST_STATES``）→ 窗口确定不在，直接删记录；
-        - ``"unknown"`` → 交给老路径（daemon 说没见过这个请求，但记录里可能
-          还有 session_id 那条线索可用）。
-
-        绝不抛异常：它跑在插件启动路径上。
+        Returns:
+            (剩余需按会话 id 检查的记录列表, 已成功取消的请求数)。
         """
         tokens = [e.request_id for e in recorded if e.request_id]
         if not tokens:
             return recorded, 0
-        # 老 bsk 整轮跳过。探测本身每进程只做一次（结果被缓存），
-        # 所以这里不会给启动路径增加额外的子进程开销。
         if not await self._request_protocol_supported():
             return recorded, 0
 
@@ -1148,7 +830,6 @@ class SessionManager:
                 continue
             state = await self._query_request(token)
             if state is None:
-                # 问不到 ≠ 不存在 → 保守，留给下次（也交给老路径再试一次）。
                 remaining.append(entry)
                 continue
             if state in LIVE_REQUEST_STATES:
@@ -1158,12 +839,12 @@ class SessionManager:
                     self._counters["request_orphans_cancelled"] += 1
                     self._logger.debug("[孤儿请求清理] 回收遗留未认领请求 token=%s", token)
                 else:
-                    remaining.append(entry)  # 未确认 → 保留
+                    remaining.append(entry)
                 continue
             if state in TERMINAL_REQUEST_STATES:
-                self._journal_remove_by_request(token)  # 窗口确定不在
+                self._journal_remove_by_request(token)
                 continue
-            remaining.append(entry)  # unknown → 交给老路径
+            remaining.append(entry)
         if stopped:
             self._logger.info("按启动令牌回收了 %d 个遗留的浏览器启动请求", stopped)
         return remaining, stopped
@@ -1224,15 +905,7 @@ class SessionManager:
         return sum(1 for e in self._entries.values() if e.session.session_id)
 
     async def close(self) -> None:
-        """释放全部资源（等价 ``release_all`` + 清理内部状态）。
-
-        本模块不创建任何后台任务（空闲回收由 ``main.py`` 调度），
-        所以"清理任务"这一步在这里没有对应动作，只做状态收尾。
-
-        关闭后 ``acquire`` / ``execute`` 会抛 ``BskError(code="manager_closed")``：
-        明确失败好过在插件卸载后悄悄新建一个没人回收的会话。
-        本方法不抛异常。
-        """
+        """释放所有会话并标记关闭。绝不抛异常。"""
         try:
             await self.release_all()
         except Exception as exc:  # noqa: BLE001 - 关闭路径绝不抛
@@ -1246,7 +919,7 @@ class SessionManager:
     # ------------------------------------------------------------------
 
     def _ensure_open(self) -> None:
-        """管理器已被 close 时，拒绝新建/执行（防止 terminate 后泄漏会话）。"""
+        """管理器关闭后拒绝新建或执行操作。"""
         if self._closed:
             raise BskError(
                 "会话管理器已关闭",
@@ -1256,11 +929,7 @@ class SessionManager:
 
     @contextlib.asynccontextmanager
     async def _locked_entry(self, key: str):
-        """取到 key 的 entry 并持有它的锁，退出时自动释放。
-
-        会处理"取到 entry 后、拿到锁前，该 entry 被 release 摘走"的竞态：
-        发现槽位已不是字典里的那个就重新取（有次数上限，保证不活锁）。
-        """
+        """获取指定 key 槽位并持有锁的异步上下文管理器。"""
         for _ in range(MAX_ENTRY_RETRIES):
             entry = await self._get_or_create_entry(key)
             await entry.lock.acquire()
@@ -1278,20 +947,14 @@ class SessionManager:
         )
 
     async def _get_or_create_entry(self, key: str) -> _Entry:
-        """取 key 的槽位；没有就先占位再返回（真正的 start 在锁内做）。
-
-        占位很关键：如果等 ``start`` 完成才写进字典，10 个并发 ``acquire``
-        会各起一个会话（bsk 侧留下 10 个 Agent Window）。
-        """
-        # 重试路径可能已经跨过了 close()，这里再确认一次：
-        # 关闭之后绝不允许再造新会话，否则 terminate 后还会泄漏 Agent Window。
+        """获取或创建槽位。若不存在则预占位并按 LRU 检查容量。"""
         self._ensure_open()
 
         entry = self._entries.get(key)
         if entry is not None and not entry.closed:
             return entry
 
-        # 可能需要新建：先按 LRU 腾出容量（这一步会 await stop，不能放在登记锁里）。
+        # 先按 LRU 腾出容量
         await self._evict_for_capacity()
 
         async with self._registry_lock:
@@ -1343,24 +1006,15 @@ class SessionManager:
         previous_id = entry.session.session_id
         entry.session.session_id = ""
 
-        # --- 可恢复启动：写前落盘 → prepare → start --request-id → claim ---
-        #
-        # 顺序不能换。核心不变式是「**绝不带着 --request-id 发出 start，却没有
-        # 持久化的令牌**」：令牌是 start 回执丢失后唯一能把窗口找回来的东西，
-        # 落盘晚一步就等于没落。所以落盘失败时不带令牌走普通启动（= 旧行为），
-        # 而不是拒绝启动。
+        # 可恢复启动流程：预写 journal 令牌 -> daemon prepare -> start --request-id -> claim
+        # 若令牌写入失败则降级为普通启动，避免阻塞会话建立。
         token = ""
         if await self._request_protocol_supported():
             token = self._new_request_token()
             if not self._journal_add_pending(token):
-                # 裁决（见 DECISION-write-ahead-failure.md）：降级，不拒绝。
-                #   要守的不变式是「绝不带 --request-id 启动却没有持久令牌」——
-                #   既然写不进去，就不带令牌走普通启动（= 今天的行为，逐字节相同）。
-                #   拒绝启动会让"数据目录不可写"这种环境问题把整个浏览器功能瘫痪，
-                #   而既有测试 TestJournalFailureIsHarmless 明确要求会话必须照常建立。
                 self._counters["request_write_ahead_failed"] += 1
                 self._logger.warning(
-                    "启动令牌写不进 journal，这次会话将不带可恢复启动（退回旧行为）：%s",
+                    "启动令牌写入 journal 失败，本次会话降级为普通启动：%s",
                     token,
                 )
                 token = ""
@@ -1368,7 +1022,6 @@ class SessionManager:
                 try:
                     await self._prepare_request(token)
                 except BaseException:
-                    # 还没发 start —— 窗口一定不存在（实测 prepare 返回 session: null）。
                     await self._cancel_request(token)
                     self._journal_remove_by_request(token)
                     raise
@@ -1376,30 +1029,19 @@ class SessionManager:
         try:
             fresh = await self._start(start_args=start_args, request_id=token)
         except BaseException:
-            # 必须是 BaseException（含 CancelledError）。此刻 start 的结果
-            #   **未知** —— 可能什么都没建，也可能窗口已经开出来而回执丢了。
-            #   令牌是唯一能把那个窗口找回来的东西。
             if token:
                 self._counters["request_start_failed"] += 1
                 if await self._cancel_request(token):
-                    # 已确认窗口不在 → 记录可以删。没确认就**保留**（见下）。
                     self._journal_remove_by_request(token)
             raise
 
-        # 立刻落盘 —— 这是整个崩溃恢复机制的起点。
-        #   必须在这里（而不是等 acquire 返回后）写：从 start 成功到调用方拿到
-        #   会话之间有任何一处崩溃，那个会话就已经无人知晓了。
-        #   注意这条记录此时还不属于任何槽位，所以即使下面发现 entry 已被
-        #   摘除，也要先把记录清掉再抛异常。
+        # 启动成功立即落盘记录会话所有权
         self._journal_add(
             fresh,
             request_id=token,
             state=(REQUEST_STATE_PREPARED if token else ""),
         )
         if previous_id and previous_id != fresh.session_id:
-            # 这是一次"带旧 id 的重建"（``not_found`` 触发的路径不会去 stop
-            # 旧会话，所以那个 id 的 journal 记录还在）。把它删掉：bsk 已经确认
-            # 旧会话不存在了，留着只会让下次启动拿它去比对，白多一轮无用功。
             self._journal_remove(previous_id)
 
         if token:
@@ -1410,16 +1052,10 @@ class SessionManager:
                 if await self._cancel_request(token):
                     self._journal_remove_by_request(token)
                 raise
-            # claim 成功：把 state 更新为 active（此时才真正"认领"）。
-            #   这次写失败只记日志：窗口已存在、且我们有 session_id，
-            #   旧的 v1 兜底路径仍然覆盖得住它。
             self._journal_add(fresh, request_id=token, state=REQUEST_STATE_ACTIVE)
 
         if entry.closed:
-            # 极端竞态：槽位在 start 期间被 release/reap 摘走（start 慢于
-            # RELEASE_WAIT_SEC 时可能发生）。这个新会话已经没人管了，必须立刻
-            # 停掉 —— 否则它会一直占着用户的浏览器，而 bsk 5 分钟后才回收，
-            # 且回收不保证归还借用的标签页。
+            # 槽位在启动期间被释放，立即清理该新会话防止泄漏
             with contextlib.suppress(Exception):
                 await self._stop_session_id(fresh.session_id)
             raise BskError(
@@ -1439,15 +1075,7 @@ class SessionManager:
         """丢弃旧会话并重建。
 
         Args:
-            stop_old: 是否先显式 stop 旧会话。``not_found`` 触发的重建必须传
-                False：bsk 已经说了这个会话不存在，再 stop 一次既多花一次往返，
-                又可能误杀"别的程序刚建出来的同 id 会话"（4 个小写字母的组合
-                空间并不大）。
-
-        Note:
-            重建**刻意不接收也不携带** ``start_args``：它的职责是把会话恢复
-            回可用状态，不是为了改窗口尺寸。原来的尺寸要求属于"当初那次建会话"
-            那一次调用，只在那一次有意义。
+            stop_old: 是否显式 stop 旧会话（not_found 触发时传 False）。
         """
         if stop_old and entry.session.is_valid():
             await self._stop_entry(entry)
@@ -1456,19 +1084,15 @@ class SessionManager:
     async def _start(
         self, *, start_args: Sequence[str] = (), request_id: str = ""
     ) -> BskSession:
-        """执行 ``session start`` 并解析出会话。
+        """执行 ``session start`` 并解析会话。
 
         Args:
-            start_args: 追加到命令末尾的额外参数（``--width``/``--height`` 等）。
-                正常路径传空元组；只有"显式要求带尺寸建会话"的
-                :meth:`acquire` 会一路传到这里。
-            request_id: 可恢复启动令牌。非空时追加 ``--request-id``，让 daemon
-                把这次启动与令牌绑定 —— 这正是"回执丢了也能找回窗口"的依据。
-                空串（默认）时命令行与旧实现逐字节相同。
+            start_args: 启动额外参数（如窗口尺寸）。
+            request_id: 可恢复启动令牌。
 
         Raises:
-            BskError: 启动失败，或返回里没有 session_id（协议异常）。
-            BskStartCancelled: 这次启动已被取消（``code="cancelled"``）。
+            BskError: 启动失败或协议数据异常。
+            BskStartCancelled: 启动已被取消。
         """
         browser_id = await self._resolve_browser_instance()
         try:
@@ -1481,9 +1105,6 @@ class SessionManager:
                 raise_on_error=True,
             )
         except BskError as exc:
-            # T6：cancelled 是"已按调用方的要求抑制"的成功语义，必须显式识别。
-            #   重试会被同一条墓碑再次拒绝；回退到不带 --request-id 的普通 start
-            #   则会绕开取消，开出一个没有任何所有权凭据保护的窗口。
             if is_cancelled_error(exc):
                 self._counters["request_cancelled"] += 1
                 raise _cancelled_from(exc) from exc
@@ -1513,26 +1134,10 @@ class SessionManager:
 
     # ------------------------------------------------------------------
     # 内部：可恢复启动（request_id 协议）
-    #
-    # 协议本身只有四条命令，且都不开窗口、不导航，只改 daemon 侧的记账：
-    #
-    #     prepare  预约令牌（返回 session: null）
-    #     start --request-id <令牌>   真正的启动，窗口在这里才出现
-    #     claim    认领：此后不再被 daemon 的到期回收关掉
-    #     cancel   立墓碑并关掉可能的窗口
-    #
-    # 分工见 ``_start_into``；本节的每个方法都刻意把失败语义写清楚 ——
-    # 它们在"start 回执已经丢了"这种最需要确定性的时刻被调用。
     # ------------------------------------------------------------------
 
     def _new_request_token(self) -> str:
-        """生成 bsk 可恢复启动令牌：``<到期-unix-毫秒>:<UUID>``。
-
-        格式由 bsk 决定（实测 ``1791240198465:95861217-...``），两处细节都不能错：
-        到期时间**必须是 Unix 毫秒**（写成秒会立刻过期）；
-        UUID 用随机值 —— **每次启动都必须新生成，绝不复用**（复用会让第二次 start
-        返回第一次的会话，随后的 cancel 会关掉用户正在用的窗口）。
-        """
+        """生成可恢复启动令牌：``<到期-unix-毫秒>:<UUID>``。"""
         ttl = min(
             REQUEST_TOKEN_TTL_MAX_SEC,
             max(REQUEST_TOKEN_TTL_SEC, 2 * self._start_timeout + REQUEST_TOKEN_TTL_MARGIN_SEC),
@@ -1540,13 +1145,7 @@ class SessionManager:
         return f"{int((time.time() + ttl) * 1000)}:{uuid.uuid4()}"
 
     async def _request_protocol_supported(self) -> bool:
-        """本次运行是否支持 bsk 的可恢复启动。**每进程只探测一次**。
-
-        探测用 ``bsk session request --help``：零副作用、不碰 daemon 状态，
-        老 bsk 会以非零退出码拒绝这个子命令 —— 那就是"不支持"。
-        **绝不能因为探测失败就让插件报错**：bsk 没装、版本老、临时抽风，
-        都只是"退回旧行为"，旧行为本来就是今天的行为。
-        """
+        """探测当前 bsk 是否支持可恢复启动协议。每进程仅探测一次并缓存结果。"""
         if not self._enable_request_id:
             self._counters["request_protocol_disabled"] += 1
             self._logger.info(
@@ -1568,10 +1167,10 @@ class SessionManager:
         return self._request_protocol
 
     async def _probe_request_protocol(self) -> bool:
-        """真正跑一次能力探测。任何失败都只是"不支持"，绝不抛异常。"""
+        """探测 bsk 是否支持 session request。失败返回 False，绝不抛异常。"""
         try:
             result = await self._cli.request_probe(timeout=REQUEST_PROBE_TIMEOUT_SEC)
-        except Exception as exc:  # noqa: BLE001 - 老 bsk 会以非零码拒绝，bsk 没装也会抛
+        except Exception as exc:  # noqa: BLE001
             self._logger.debug("bsk 不支持 session request（能力探测失败）：%r", exc)
             return False
         return "--prepare" in (result.stdout or "")
@@ -1579,14 +1178,12 @@ class SessionManager:
     async def _request_command(
         self, args: list[str], *, request_id: str
     ) -> dict[str, Any]:
-        """跑一条 ``session request`` 命令并解析 JSON。失败抛 BskError。"""
+        """执行 ``session request`` 命令并解析 JSON。失败抛 BskError。"""
         try:
             result = await self._cli.request_command(
                 args, timeout=REQUEST_PROTOCOL_TIMEOUT_SEC, raise_on_error=True
             )
         except BskSessionGone as exc:
-            # 令牌不存在（实测退出码 1）。绝不能让 BskSessionGone 冒到 execute() 的
-            # 重建逻辑里 —— 那会去重建一个本不该存在的会话。
             raise BskError(
                 f"启动令牌不存在或已过期：{request_id}（{exc}）",
                 friendly=(
@@ -1599,7 +1196,6 @@ class SessionManager:
             ) from exc
         except BskError as exc:
             if is_cancelled_error(exc):
-                # 统一的翻译点：cancelled 在四条命令里含义一致（已被抑制）。
                 raise _cancelled_from(exc) from exc
             raise
         data = result.data
@@ -1616,11 +1212,7 @@ class SessionManager:
         return data
 
     async def _prepare_request(self, request_id: str) -> None:
-        """``session request <令牌> --prepare``：在 daemon 里预约一次启动。
-
-        这一步**不开任何窗口**（实测返回 ``session: null``），它的价值是让 daemon
-        先认下令牌 —— 之后 start 的回执即使丢了，也能凭令牌反查出那次启动造出的会话。
-        """
+        """预约启动令牌（``session request <令牌> --prepare``）。"""
         self._logger.debug(
             "[会话准备] 准备启动请求 token=%s | 当前活跃会话数: %d, 槽位数: %d",
             request_id,
@@ -1643,7 +1235,7 @@ class SessionManager:
             )
 
     async def _claim_request(self, request_id: str) -> None:
-        """``--claim``：把这次启动**认领**下来，从此它不再被 daemon 的到期回收关掉。"""
+        """认领启动令牌（``session request <令牌> --claim``）。"""
         self._logger.debug(
             "[会话认领] 认领启动请求 token=%s",
             request_id,
@@ -1664,11 +1256,10 @@ class SessionManager:
             )
 
     async def _cancel_request(self, request_id: str) -> bool:
-        """``--cancel``：立墓碑并关掉可能的窗口。**绝不抛异常**（清理路径铁律）。
+        """取消启动令牌并关闭关联窗口（``session request <令牌> --cancel``）。绝不抛异常。
 
         Returns:
-            True 表示**已确认窗口不在**（``state == "closed"`` 且 ``cleanup_error`` 为空）；
-            False 表示没确认 —— 调用方**必须保留 journal 记录**，留给下次启动重试。
+            True 表示已确认关闭；False 表示未确认。
         """
         if not request_id:
             return False
@@ -1678,9 +1269,7 @@ class SessionManager:
                 ["session", "request", request_id, "--cancel", "--json"],
                 request_id=request_id,
             )
-        except BaseException as exc:  # noqa: BLE001 - 含 CancelledError，这是刻意的
-            # 它只从错误路径调用，调用方会原样重抛原始异常；这里吞掉一切是为了
-            # 保证"补偿动作本身"永远不会把真正的失败原因盖掉。
+        except BaseException as exc:  # noqa: BLE001 - 含 CancelledError
             self._logger.warning(
                 "取消启动请求 %s 失败，保留 journal 记录待下次启动重试：%r",
                 request_id,
@@ -1702,13 +1291,7 @@ class SessionManager:
         return False
 
     async def _query_request(self, request_id: str) -> str | None:
-        """查令牌当前状态。**问不到返回 None**（绝不抛）。
-
-        ``None`` 与 ``"unknown"`` 是两回事：
-        - ``"unknown"``：daemon 明确回答"没见过这个请求"（实测 exit 0）；
-        - ``None``：我们没问着（daemon 没跑、超时、输出不是 JSON）。
-        前者的信息是确定的，后者必须保守（保留记录）。
-        """
+        """查询启动令牌状态。问不到或出错返回 None。"""
         if not request_id:
             return None
         try:
@@ -1786,122 +1369,49 @@ class SessionManager:
         return await self._stop_session_id(entry.session.session_id)
 
     async def _stop_session_id(self, session_id: str) -> bool:
-        """按 id 停掉一个会话，对瞬时故障做有界重试。绝不抛异常。
+        """按精确 id 停止会话，对瞬时故障执行有界重试。绝不抛异常。
 
-        为什么必须重试（实测缺陷）：bsk 0.3.2 会间歇性地对 ``session stop`` 返回
-
-            extension rejected tool.session_stop: RpcError {
-                code: ProtocolError, message: "Background execution cleanup timed out" }
-
-        此时会话仍然活着（Agent Window 还开着），而旧实现只试一次就放弃 ——
-        会话于是泄漏在 daemon 里，直到 bsk 自己 5 分钟后回收，且回收不保证归还
-        借用的标签页，用户桌面上会留下没关的浏览器窗口。实测（本机真实浏览器）
-        "曾经 navigate 失败过"的会话 48 轮泄漏 6 轮（≈12.5%），而紧接一次重试
-        就能成功，说明这是瞬时状态 —— 重试正是对症的修法。
-
-        重试 stop 是安全的，理由有两条：
-
-        1. 幂等：如果会话其实已经停了，bsk 会回 ``not_found``，而本方法已经把
-           ``not_found`` 当作"目的已达成"处理（见下面的 ``except BskSessionGone``）。
-           所以"多停一次"最多多花一次往返，不会误判。
-        2. 不碰别人的会话：命令里带的是精确 id，永远不是
-           ``session stop --all``（红线，见模块文档第 3 条与既有守护测试）。
-
-        时间上界（``terminate()`` 绝不能被拖住）：整次调用只有一个截止
-        时刻，在进入循环前算好：
-
-            总上限 = STOP_TIMEOUT_SEC + STOP_RETRY_BUDGET_SEC = 15 + 5 = 20 秒
-
-        每次尝试的超时取 ``min(单次上限, 剩余预算)``，每次等待也取
-        ``min(重试延迟, 剩余预算)``，所以再怎么写都不会越过这 20 秒。
-        实测那条 ``cleanup timed out`` 是毫秒级快速失败，根本用不到 15 秒超时，
-        因此重试实际只花几十毫秒；多给的 5 秒预算换来的是"不再泄漏一个窗口"。
-        多会话并发时由 ``release_all`` 用 ``asyncio.gather`` 并发跑，总耗时不随
-        会话数线性累加（见 ``release_all`` 的说明）。
-
-        与 journal 的分工：这里的重试是本次运行内的第一道防线；
-        ``journal.py`` + ``recover_orphans()``（下次启动时按记录精确回收）是
-        第二道。两道防线互补：重试解决"进程还活着但这一次 stop 撞上瞬时故障"，
-        journal 解决"进程被强杀、根本没有机会 stop"。所以下面对 journal 的
-        增删语义必须与旧实现一致：
-
-        - stop 成功 → 删记录；
-        - stop 报 not_found → 也删（bsk 已确认会话不存在）；
-        - stop 失败（含重试用尽） → 刻意保留记录，留给下次启动兜底。
+        核心机制：
+        1. 仅按精确 session_id 停止，绝不使用 session stop --all；
+        2. 幂等处理：若返回 not_found 视为已成功停止；
+        3. 有界重试：总耗时由 STOP_TOTAL_BUDGET_SEC 约束，避免阻塞 terminate 流程；
+        4. 成功后清理 journal 记录，重试耗尽失败时保留记录供下次启动恢复。
 
         Args:
-            session_id: bsk 会话 id。空串直接当成功（没有会话可停）。
+            session_id: bsk 会话 id。空串直接返回 True。
 
         Returns:
-            True 表示 bsk 侧确认该会话已不存在（stop 成功，或本来就没了）。
+            True 表示会话已确认不存在（停止成功或原本不存在）；False 表示停止失败。
         """
         if not session_id:
             return True
 
-        # id 是位置参数！这是 bsk 里唯一的例外（其余命令都用 --session）。
-        # 绝不用 `session stop --all`：那会停掉别的程序（如用户的 DSH）的会话。
         args = ["session", "stop", session_id]
-
-        # 整次调用的唯一截止时刻（单调钟）。所有尝试与等待都必须落在它之内，
-        #   于是"总耗时有界"这件事是可证明的，而不是靠各处常量互相心算。
-        #
-        #   刻意用 time.monotonic() 而不是 self._clock：self._clock 是给 LRU/空闲
-        #   回收用的接缝，单元测试里会被换成不会自己走的假时钟，拿它做超时预算会
-        #   导致重试永不停止。_wait_idle 也是同样的选择。
         deadline = time.monotonic() + self._stop_total_budget_sec
         last_exc: BaseException | None = None
         attempt = 0
 
-        # 循环次数硬上限 = self._stop_max_attempts（生产值 STOP_MAX_ATTEMPTS），
-        #   且每个分支要么 return、要么 break，所以不存在无限重试的可能。
         for attempt in range(1, self._stop_max_attempts + 1):
-            # 每次尝试的两条时限都从剩余总预算反推，而不是各用各的固定常量。
-            #
-            #   关键点：一次尝试的完整耗时是 ``attempt_timeout + 超时后的清理开销``
-            #   （runner 要先关 stdin 给宽限、再 kill、再收管道）。所以必须先把这份
-            #   开销预留出来，再决定这次能拿多少超时 —— 否则我们会把 runner 的
-            #   清理流程从中间掐断，反而更可能留下一个 bsk 子进程。
-            #
-            #   于是每次尝试的耗时有上界 ``min(剩余, attempt_timeout + 开销)``，
-            #   "整次调用不超过 deadline"因此可以逐条推出来。
             remaining = max(0.0, deadline - time.monotonic())
             budget_for_timeout = remaining - self._stop_attempt_overhead_sec
             attempt_timeout = min(self._stop_timeout_sec, max(0.0, budget_for_timeout))
-            # "值得再试一次"的门槛：正常情况下是 STOP_RETRY_MIN_TIMEOUT_SEC（1s），
-            # 但若单次超时本身就被配得比它还小，门槛必须跟着降下来 ——
-            # 否则会出现"每次尝试本来就只给 0.05s，却要求剩余预算 ≥ 1s"的矛盾，
-            # 让重试永远发不出去（把配置值当成错误来用）。
+
             min_worthwhile = min(
                 STOP_RETRY_MIN_TIMEOUT_SEC, self._stop_timeout_sec
             )
             if attempt > 1 and attempt_timeout < min_worthwhile:
-                # 剩余额度已经不够"一次有意义的尝试 + 它的清理开销"了。
-                # 再发一次只会立刻超时，纯粹浪费 terminate() 的时间。
-                # 首次尝试不走这个判断（它的额度由总预算本身保证）。
                 self._counters["stop_retry_budget_skips"] += 1
                 self._logger.warning(
-                    "停止会话 %s 的剩余预算 %.2fs 不足以再试一次，放弃重试",
+                    "停止会话 %s 剩余预算 %.2fs 不足以重试，放弃",
                     session_id,
                     remaining,
                 )
                 break
             if attempt == 1 and attempt_timeout < min_worthwhile:
-                # 走到这里说明总预算被外部配得异常小（只可能出现在测试里）。
-                # 首次尝试仍然要发一次，但额度绝不越过剩余总预算。
                 attempt_timeout = min(remaining, min_worthwhile)
             if attempt > 1:
-                # 只在真的要再发一次时记数，这样 stop_retries 的含义是
-                # "实际发出的重试次数"，而不是"打算重试的次数"。
                 self._counters["stop_retries"] += 1
 
-            # 兜底的三条约束取最小：
-            #   ① 兜底常量 —— "runner 彻底失控"时保险丝的长度；
-            #   ② remaining —— 绝不越过总截止时刻（保证总耗时有界）；
-            #   ③ 本次超时 + 清理开销 + 余量 —— 对守约的 runner 永不触发。
-            # 因为 attempt_timeout ≤ remaining - 开销（上面的预留保证了这点），
-            # 三者取最小后仍 ≥ runner 的合法最坏耗时（attempt_timeout + 开销），
-            # 所以兜底不会抢在 runner 自己的超时之前动手 —— 那会把正常的
-            # BskTimeout 变成一个语义更差的兜底错误。
             backstop = min(
                 self._stop_attempt_backstop_sec,
                 remaining,
@@ -1909,17 +1419,13 @@ class SessionManager:
                 + self._stop_attempt_overhead_sec
                 + STOP_ATTEMPT_BACKSTOP_MARGIN_SEC,
             )
-            # 兜底至少要 ≥ 本次超时，否则 wait_for 会立刻超时（等于不执行）。
             backstop = max(backstop, attempt_timeout)
             try:
                 await self._stop_once(args, session_id, attempt_timeout, backstop)
             except BskSessionGone:
-                # bsk 说它已经不存在了 —— 对我们来说目的已达成，不算失败。
                 self._counters["stopped"] += 1
                 self._journal_remove(session_id)
                 if attempt > 1:
-                    # 靠重试救回来的（上一次报了 not_found 之外的错，这次 bsk 说
-                    # 会话没了）—— 单列一个计数器，便于诊断"瞬时故障有多常见"。
                     self._counters["stop_recovered"] += 1
                     self._logger.info(
                         "会话 %s 在第 %d 次尝试时确认已停止", session_id, attempt
@@ -1937,18 +1443,14 @@ class SessionManager:
                 remaining = deadline - time.monotonic()
 
                 if attempt >= self._stop_max_attempts:
-                    break  # 次数用尽
+                    break
                 if not _is_transient_stop_error(exc):
-                    # 重试无意义（bsk 没装 / 版本不匹配 / 命令本身有问题）。
-                    # 立刻放弃，别浪费 terminate() 的时间预算。
                     self._logger.debug(
                         "停止会话 %s 失败且不属于瞬时故障，不再重试：%r",
                         session_id,
                         exc,
                     )
                     break
-                # 预算检查与 stop_retries 记数统一放在循环开头（各只有一处），
-                # 这里只负责打日志并等待。
                 self._logger.warning(
                     "停止会话 %s 第 %d 次失败（瞬时故障），%.2fs 后重试：%r",
                     session_id,
@@ -1956,15 +1458,12 @@ class SessionManager:
                     self._stop_retry_delay_sec,
                     exc,
                 )
-                # 等待时长也受预算约束：绝不会睡过 deadline。
                 await asyncio.sleep(
                     min(self._stop_retry_delay_sec, max(0.0, remaining))
                 )
                 continue
             else:
                 self._counters["stopped"] += 1
-                # 已确认停掉，立刻从 journal 里移除 —— 否则下次启动会去停一个已经
-                # 不存在的 id，白白多一次往返（虽然比对逻辑会挡住误停）。
                 self._journal_remove(session_id)
                 if attempt > 1:
                     self._counters["stop_recovered"] += 1
@@ -1998,27 +1497,17 @@ class SessionManager:
     async def _stop_once(
         self, args: list[str], session_id: str, attempt_timeout: float, backstop: float
     ) -> None:
-        """发一次 ``session stop`` 命令，成功即返回，失败即抛。
-
-        单独抽出来只为一件事：把"硬性墙钟兜底"与业务重试逻辑分开，让
-        :meth:`_stop_session_id` 的重试循环保持可读。
-
-        兜底的必要性：``BskRunner.run`` 自己就有超时，正常情况这一层永远不触发。
-        但只要 runner 因为任何原因（bug、Windows 上进程卡在不可中断的系统调用）
-        不返回，兜底保证 ``terminate()`` 仍然能在有限时间内结束 —— 那是硬要求。
+        """执行一次 ``session stop`` 命令。
 
         Args:
-            args: 完整参数列表（``["session", "stop", <id>]``）。
-            session_id: 仅用于错误信息。
-            attempt_timeout: 本次尝试的超时（已按剩余总预算收敛过）。
-            backstop: 本次尝试的硬性墙钟上限（同样已按剩余总预算收敛过，
-                且严格大于 ``attempt_timeout``）。
+            args: 命令参数列表。
+            session_id: 会话 ID。
+            attempt_timeout: 本次执行超时。
+            backstop: 硬性超时兜底。
 
         Raises:
-            BskError: 原样抛出 runner 的分类异常；
-                兜底触发时抛出 ``code="stop_backstop_timeout"`` 的 ``BskTimeout``
-                （刻意不是裸 ``TimeoutError``：后者没有 ``friendly`` 中文提示，
-                进 ``recent_stop_errors`` 也只是一句空话，排查时毫无指向性）。
+            BskError: 命令执行失败。
+            BskTimeout: 超出兜底时间未返回。
         """
         try:
             await asyncio.wait_for(
@@ -2028,7 +1517,6 @@ class SessionManager:
                 timeout=backstop,
             )
         except asyncio.TimeoutError as exc:
-            # 走到这里说明 runner 没有遵守自己的超时约定（正常路径永远到不了）。
             raise BskTimeout(
                 f"session stop {session_id} 超过 {backstop:.1f}s 未返回"
                 "（runner 未遵守自身超时约定）",
@@ -2046,7 +1534,7 @@ class SessionManager:
         return sum(1 for r in results if r is True)
 
     async def _shutdown_one(self, entry: _Entry) -> bool:
-        """等的命令结束 → stop。包了 try/except，绝不抛。"""
+        """等待进行中的命令结束并停止会话。绝不抛异常。"""
         try:
             await self._wait_idle(entry, RELEASE_WAIT_SEC)
             return await self._stop_entry(entry)
@@ -2056,17 +1544,12 @@ class SessionManager:
             return False
 
     async def _evict_for_capacity(self) -> int:
-        """LRU 淘汰：容量满了就把最久未使用的会话停掉。
-
-        Returns:
-            淘汰数量。
-        """
+        """按 LRU 淘汰超出容量上限的会话，返回淘汰数量。"""
         evicted = 0
-        # 每轮都至少 pop 一个，字典单调收缩，不会死循环。
         while self._entries and len(self._entries) >= self._max_sessions:
             victim_key, victim = self._pick_lru()
             popped = self._entries.pop(victim_key, None)
-            if popped is None:  # pragma: no cover - 防御，理论上不会发生
+            if popped is None:
                 break
             popped.closed = True
             await self._wait_idle(popped, RELEASE_WAIT_SEC)
@@ -2087,27 +1570,18 @@ class SessionManager:
                 victim_key,
                 self._clock() - popped.last_used,
             )
-            del victim  # 仅为可读性
+            del victim
         return evicted
 
     def _pick_lru(self) -> tuple[str, _Entry]:
-        """挑出最久未使用的槽位。
-
-        次级排序键用创建序号，保证"同一时刻创建"时淘汰的是最先建的那个
-        （``time.monotonic`` 分辨率虽高，但测试里可能被假时钟拉平）。
-        """
+        """挑出最久未使用的槽位。相同时间按创建序号排序。"""
         return min(
             self._entries.items(),
             key=lambda kv: (kv[1].last_used, kv[1].seq),
         )
 
     async def _wait_idle(self, entry: _Entry, timeout: float) -> bool:
-        """等在飞的命令结束（最多 timeout 秒）。
-
-        Returns:
-            True 表示锁已空闲；False 表示等超时了（调用方仍应继续 stop ——
-            宁可让在飞命令失败，也不能让关闭流程挂住）。
-        """
+        """等待正在执行的命令结束（最多 timeout 秒）。"""
         if not entry.lock.locked():
             return True
         deadline = time.monotonic() + max(0.0, timeout)
@@ -2123,7 +1597,7 @@ class SessionManager:
     # ------------------------------------------------------------------
 
     def _touch(self, entry: _Entry) -> None:
-        """刷新活跃时间（LRU 与空闲回收的唯一依据）。"""
+        """刷新活跃时间戳。"""
         entry.last_used = self._clock()
 
     async def _build_args(self, builder: ArgsBuilder, session_id: str) -> list[str]:
@@ -2141,35 +1615,19 @@ class SessionManager:
             )
         return [str(item) for item in produced]
 
-
     def _record_stop_error(self, detail: str) -> None:
-        """记下 stop 失败原因（只留最近 5 条，供 /bskstatus 排查）。"""
+        """记录 stop 失败原因（保留最近 5 条供 /bskstatus 排查）。"""
         self._recent_stop_errors.append(detail)
         del self._recent_stop_errors[:-5]
 
     # ------------------------------------------------------------------
-    # 内部：journal（全部是"尽力而为"，失败只记 debug 日志）
-    #
-    # journal 是辅助机制，不是会话生命周期的一部分。它的读写失败绝不能
-    # 影响会话的正常创建/停止 —— 一个只会写诊断记录的功能，不该有能力
-    # 让浏览器操作失败。
+    # 内部：journal（尽力而为，异常仅记录 debug 日志）
     # ------------------------------------------------------------------
 
     def _journal_add(
         self, session: BskSession, *, request_id: str = "", state: str = ""
     ) -> None:
-        """把一个刚建成的会话记进 journal。任何失败都只记 debug 日志。
-
-        Args:
-            session: 刚建成的会话（``session_id`` 为空时是空操作）。
-            request_id: 可恢复启动令牌（v2）。空串表示这次是普通启动。
-            state: 这条记录处于哪一步（v2）。空串表示"没有状态概念"。
-
-        Note:
-            刻意用 ``add`` 而不是 ``add_checked``：走到这里窗口**已经存在**了，
-            写失败也已无可挽回（我们手里已有 session_id，旧的比对路径覆盖得住）。
-            需要"写不进去就不发 start"的调用点用 :meth:`_journal_add_pending`。
-        """
+        """将会话所有权记录写入 journal。"""
         if self._journal is None or not session.session_id:
             return
         try:
@@ -2178,43 +1636,29 @@ class SessionManager:
                     session_id=session.session_id,
                     browser_instance_id=session.browser_instance_id,
                     agent_window_id=session.agent_window_id,
-                    # 墙钟，不是 monotonic：这条记录要跨进程读。
                     created_at=now_seconds(),
                     pid=os.getpid(),
                     request_id=request_id,
                     state=state,
                 )
             )
-        except Exception as exc:  # noqa: BLE001 - 只影响可恢复性，不影响本次会话
+        except Exception as exc:  # noqa: BLE001
             self._logger.debug("写会话 journal 失败（忽略）：%r", exc)
 
     def _journal_add_pending(self, request_id: str) -> bool:
-        """**写前落盘**：在发出任何浏览器副作用之前，先把令牌记下来。
-
-        Returns:
-            True 表示"可以继续"：要么已确实落盘，要么**根本没有 journal**
-            （那种配置下记录本来就没处放，跨进程恢复本来就不存在，
-            不该因此拒绝启动）。False 表示**有 journal 但写失败**。
-        """
+        """在创建会话前将启动令牌预写进 journal。"""
         if not REQUEST_TOKEN_RE.match(request_id or ""):
             self._logger.warning(
-                "拒绝把格式非法的启动令牌写进 journal：%r（这通常意味着插件有 bug）",
+                "拒绝把格式非法的启动令牌写进 journal：%r",
                 request_id,
             )
             return False
         if self._journal is None:
-            self._logger.debug(
-                "没有配置 journal，启动令牌 %s 无处落盘（跨进程恢复本就不存在）",
-                request_id,
-            )
             return True
         try:
             ok = bool(
                 self._journal.add_checked(
                     JournalEntry(
-                        # 这一步还不知道 session_id，只有令牌 —— 这正是 v2 记录
-                        # 存在的意义（journal 的 _dedup_key 优先用令牌去重，
-                        # 所以两条并发启动的 pending 记录不会互相覆盖）。
                         session_id="",
                         browser_instance_id="",
                         agent_window_id=0,
@@ -2225,7 +1669,7 @@ class SessionManager:
                     )
                 )
             )
-        except Exception as exc:  # noqa: BLE001 - duck-typed journal 可能没有 add_checked
+        except Exception as exc:  # noqa: BLE001
             self._logger.warning("写启动令牌到 journal 失败：%r", exc)
             return False
         if not ok:
@@ -2233,7 +1677,7 @@ class SessionManager:
         return ok
 
     def _journal_remove_by_request(self, request_id: str) -> None:
-        """按令牌删记录。空串 no-op；任何异常只记 debug（清理路径绝不抛）。"""
+        """按启动令牌从 journal 移除记录。"""
         if self._journal is None or not request_id:
             return
         try:
@@ -2242,7 +1686,7 @@ class SessionManager:
             self._logger.debug("按令牌清理 journal 记录失败（忽略）：%r", exc)
 
     def _journal_remove(self, session_id: str) -> None:
-        """会话已被正常停掉，从 journal 里移除它的记录。"""
+        """按会话 ID 从 journal 移除记录。"""
         if self._journal is None or not session_id:
             return
         try:
