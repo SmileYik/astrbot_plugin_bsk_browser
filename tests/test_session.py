@@ -787,12 +787,12 @@ class TestExecute(SessionTestCase):
             await manager.execute("umo-1", observe_builder)
         self.assertEqual(len(self.runner.calls_for("observe")), 1)
 
-    async def test_outcome_unknown_marks_session_and_blocks_next_action(
+    async def test_outcome_unknown_does_not_retry_and_raises(
         self,
     ) -> None:
-        """动作结果未知绝不重试；此后拒绝新的操作动作。"""
+        """动作结果未知绝不重试，直接抛出异常；不设粘性不确定态，后续操作不被阻断。"""
         manager = self.make_manager()
-        session = await manager.acquire("umo-1")
+        await manager.acquire("umo-1")
         self.runner.queue(
             "observe",
             fail(reason="extension_reconnected", exit_code=errors.EXIT_BROWSER),
@@ -802,32 +802,10 @@ class TestExecute(SessionTestCase):
         with self.assertRaises(BskOutcomeUnknown):
             await manager.execute("umo-1", observe_builder)
 
-        self.assertTrue(session.uncertain)
         self.assertEqual(len(self.runner.calls_for("observe")), 1)  # 没有重试
 
-        # 后续操作动作被拒（连命令都没发出去）。
-        with self.assertRaises(BskOutcomeUnknown) as ctx:
-            await manager.execute("umo-1", observe_builder)
-        self.assertEqual(ctx.exception.code, "session_uncertain")
-        self.assertEqual(len(self.runner.calls_for("observe")), 1)
-        self.assertEqual(manager.stats()["uncertain_count"], 1)
-        self.assertEqual(manager.stats()["counters"]["uncertain_blocks"], 1)
-
-    async def test_allow_uncertain_permits_readonly_command(self) -> None:
-        """只读动作显式声明 allow_uncertain=True 时可以继续。"""
-        manager = self.make_manager()
-        await manager.acquire("umo-1")
-        self.runner.queue(
-            "observe",
-            fail(reason="extension_reconnected", exit_code=errors.EXIT_BROWSER),
-        )
-
-        with self.assertRaises(BskOutcomeUnknown):
-            await manager.execute("umo-1", observe_builder)
-
-        result = await manager.execute(
-            "umo-1", observe_builder, allow_uncertain=True
-        )
+        # 后续操作动作正常执行，不被死锁阻断
+        result = await manager.execute("umo-1", observe_builder)
         self.assertTrue(result.ok)
         self.assertEqual(len(self.runner.calls_for("observe")), 2)
 
@@ -842,23 +820,6 @@ class TestExecute(SessionTestCase):
         with self.assertRaises(BskOutcomeUnknown):
             await manager.execute("umo-1", observe_builder)
         self.assertEqual(len(self.runner.calls_for("observe")), 1)
-
-    async def test_release_clears_uncertain_state(self) -> None:
-        """重建会话后不确定态应清除（新会话是干净状态）。"""
-        manager = self.make_manager()
-        session = await manager.acquire("umo-1")
-        self.runner.queue(
-            "observe",
-            fail(reason="extension_reconnected", exit_code=errors.EXIT_BROWSER),
-        )
-        with self.assertRaises(BskOutcomeUnknown):
-            await manager.execute("umo-1", observe_builder)
-        self.assertTrue(session.uncertain)
-
-        self.assertTrue(await manager.release("umo-1"))
-        again = await manager.acquire("umo-1")
-        self.assertFalse(again.uncertain)
-        self.assertNotEqual(again.session_id, "mnaa")
 
     async def test_same_key_execute_is_serialized(self) -> None:
         """同 key 的 execute 严格串行 —— bsk 侧才不会 session_busy。
@@ -1281,7 +1242,7 @@ class TestRace(SessionTestCase):
         async def worker(key: str) -> Any:
             try:
                 return await manager.execute(
-                    key, observe_builder, allow_uncertain=True
+                    key, observe_builder
                 )
             except BskError as exc:  # 会话被回收/释放导致的失败是可接受的
                 return exc

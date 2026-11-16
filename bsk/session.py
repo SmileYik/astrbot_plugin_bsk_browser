@@ -22,9 +22,8 @@
    用失败触发重建：操作失败且是 ``not_found`` 时才重建并重试一次，
    不要每次操作前先探测（那是白白多一次往返）。
 7. ``session_busy`` 等一小会儿重试一次即可。
-8. ``outcome_unknown`` 类错误（扩展断连等）绝对不能重试 —— 动作可能已经生效。
-   此时把会话标记为 ``uncertain``，此后拒绝新的操作类动作，除非调用方显式
-   声明这是只读动作（``allow_uncertain=True``，例如 observe / 截图）。
+8. ``outcome_unknown`` 类错误（扩展断连等）绝对不能重试 —— 动作可能已经生效，
+   直接向上抛出供调用方/Agent 自主判断。
 9. daemon 的生命周期独立于 AstrBot。AstrBot 被强杀时 ``terminate()`` 不会执行，
    daemon 与那些会话却还活着 —— 用户桌面上就留下了没人管的浏览器窗口。
    对策是 ``journal.py`` 的持久化所有权记录：建会话时落盘、正常 stop 后删掉、
@@ -462,8 +461,6 @@ def _adopt(target: BskSession, fresh: BskSession) -> None:
     target.browser_instance_id = fresh.browser_instance_id
     target.agent_window_id = fresh.agent_window_id
     target.interaction = fresh.interaction
-    target.uncertain = False
-    """新会话是干净状态，不确定标记随之清除。"""
 
 
 def _coerce_probe_result(value: Any) -> str:
@@ -683,7 +680,6 @@ class SessionManager:
             "busy_retries": 0,
             "evicted": 0,
             "reaped": 0,
-            "uncertain_blocks": 0,
             "not_found_rebuilds": 0,
             # --- stop 重试的可观测性（见 _stop_session_id）---
             #
@@ -733,8 +729,8 @@ class SessionManager:
                 **已有会话时完全忽略** —— 窗口尺寸只在建会话那一刻有意义。
 
         Note:
-            返回值主要用于读取 ``session_id`` / ``agent_window_id``，
-            或者用来判断 ``uncertain``。真正的命令执行请走 ``execute()``。
+            返回值主要用于读取 ``session_id`` / ``agent_window_id``。
+            真正的命令执行请走 ``execute()`` 或 ``execute_action()``。
 
         Note:
             ``start_args`` 是**按调用栈传递**的普通参数，不是任何形式的全局/
@@ -764,18 +760,16 @@ class SessionManager:
         action: Any,
         *,
         timeout: float | None = None,
-        allow_uncertain: bool = False,
     ) -> BskResult:
         """核心方法：带上会话 id 调度执行一个异步 CLI 动作 (BskCli 方法调用)。
 
         自动处理：per-key 加锁（同 key 串行）、会话失效时重建并带新 session_id 重试、
-        ``session_busy`` 短暂重试、``outcome_unknown`` 标记不确定态。任何情况下都只重试一次。
+        ``session_busy`` 短暂重试。结果未知错误不重试直接上抛。任何情况下都只重试一次。
 
         Args:
             key: 业务键（umo 等）。
             action: 接收 session_id 并返回 Awaitable[BskResult] 的可调用对象。
             timeout: 超时秒数；None 时用 ``settings.command_timeout_sec``。
-            allow_uncertain: 显式声明"这是只读动作"，允许在会话处于不确定态时执行。
 
         Returns:
             成功的 BskResult。
@@ -786,10 +780,6 @@ class SessionManager:
             await self._ensure_session(entry)
             self._touch(entry)
 
-            if entry.session.uncertain and not allow_uncertain:
-                self._counters["uncertain_blocks"] += 1
-                raise self._uncertain_error(entry.session)
-
             for attempt in range(1, MAX_ATTEMPTS + 1):
                 try:
                     res = action(entry.session.session_id)
@@ -797,12 +787,10 @@ class SessionManager:
                         result = await res
                     else:
                         result = res
-                except BskOutcomeUnknown as exc:
-                    self._mark_uncertain(entry, f"命令结果未知：{exc.message}")
+                except BskOutcomeUnknown:
                     raise
                 except BskError as exc:
                     if exc.reason in OUTCOME_UNKNOWN_REASONS:
-                        self._mark_uncertain(entry, f"命令结果未知：{exc.message}")
                         raise
 
                     if isinstance(exc, BskSessionGone):
@@ -837,33 +825,16 @@ class SessionManager:
         args_builder: ArgsBuilder,
         *,
         timeout: float | None = None,
-        allow_uncertain: bool = False,
     ) -> BskResult:
         """核心方法：带上会话 id 执行一条 bsk 命令（兼容层，内部转调 execute_action）。
 
-        自动处理：per-key 加锁（同 key 串行）、会话失效时重建、``session_busy``
-        短暂重试、``outcome_unknown`` 标记不确定态。任何情况下都只重试一次。
-
         Args:
             key: 业务键（umo 等）。
-            args_builder: 接收 ``session_id`` 返回完整参数列表的可调用对象，
-                例如 ``lambda sid: ["observe", "--session", sid, "--json"]``。
-                可以是协程函数（返回值会被 await）。
-                用函数而不是现成列表，是为了重建会话后能用新的 session_id
-                重新构造参数。
+            args_builder: 接收 ``session_id`` 返回完整参数列表的可调用对象。
             timeout: 超时秒数；None 时用 ``settings.command_timeout_sec``。
-            allow_uncertain: 显式声明"这是只读动作"，允许在会话处于不确定态时
-                继续执行（例如 observe、截图）。写/点击类动作绝对不要传 True。
 
         Returns:
             成功的 ``BskResult``。
-
-        Raises:
-            BskOutcomeUnknown: 会话不确定态被拒；或命令本身结果未知（此时会话已被
-                标记为 uncertain，后续动作都会被拒绝）。
-            BskSessionGone: 会话失效且重建后仍然失效（重试已用尽）。
-            BskSessionBusy: 会话一直忙（重试已用尽）。
-            BskError: 其他 bsk 错误，``friendly`` 可直接给用户/模型看。
         """
         effective_timeout = (
             float(timeout) if timeout is not None else self._command_timeout
@@ -877,7 +848,6 @@ class SessionManager:
             key,
             _run_args,
             timeout=effective_timeout,
-            allow_uncertain=allow_uncertain,
         )
 
     async def close_tab_safe(
@@ -1234,7 +1204,6 @@ class SessionManager:
                     "session_id": entry.session.session_id or "(未建立)",
                     "browser_instance_id": entry.session.browser_instance_id,
                     "agent_window_id": entry.session.agent_window_id,
-                    "uncertain": entry.session.uncertain,
                     "busy": entry.lock.locked(),
                     "idle_sec": round(max(0.0, now - entry.last_used), 1),
                 }
@@ -1245,7 +1214,6 @@ class SessionManager:
             "max_sessions": self._max_sessions,
             "idle_release_sec": self._idle_release_sec,
             "default_timeout_sec": self._command_timeout,
-            "uncertain_count": sum(1 for d in details if d["uncertain"]),
             "details": details,
             "counters": dict(self._counters),
             "recent_stop_errors": list(self._recent_stop_errors),
@@ -2173,28 +2141,6 @@ class SessionManager:
             )
         return [str(item) for item in produced]
 
-    def _mark_uncertain(self, entry: _Entry, why: str) -> None:
-        """把会话标记为不确定态：动作结果未知，此后拒绝新的操作动作。"""
-        entry.session.uncertain = True
-        self._logger.warning(
-            "会话 %s 进入不确定态（%s）：后续动作将被拒绝，"
-            "需要人工确认页面状态或 release 后重建",
-            entry.session.session_id or entry.key,
-            why,
-        )
-
-    @staticmethod
-    def _uncertain_error(session: BskSession) -> BskOutcomeUnknown:
-        """构造"因不确定态拒绝执行"的异常。"""
-        return BskOutcomeUnknown(
-            f"会话 {session.session_id} 处于不确定状态，拒绝执行新动作",
-            friendly=(
-                "上一次浏览器操作的结果无法确认，为避免重复点击/重复提交，"
-                "我不会再执行新的操作。请先人工确认浏览器里的实际状态；"
-                "确认没问题后可以让我重新建立会话再继续。"
-            ),
-            code="session_uncertain",
-        )
 
     def _record_stop_error(self, detail: str) -> None:
         """记下 stop 失败原因（只留最近 5 条，供 /bskstatus 排查）。"""

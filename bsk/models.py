@@ -146,12 +146,6 @@ class BskSession:
     browser_instance_id: str = ""
     agent_window_id: int = 0
     interaction: InteractionSettings = field(default_factory=InteractionSettings)
-    uncertain: bool = False
-    """为 True 表示上一次操作结果未知（``outcome_unknown``）。
-
-    bsk 禁止重放这类操作，因此处于该状态时应拒绝新的操作动作，
-    直到用户人工确认页面状态或重建会话。
-    """
 
     @classmethod
     def from_json(cls, raw: Any) -> BskSession:
