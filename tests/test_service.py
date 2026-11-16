@@ -2833,17 +2833,8 @@ class TestReadConsoleAndNetwork(ServiceIntegrationCase):
         self.assertIn("失败", rendered)
         self.assertIn("net::ERR_FAILED", rendered)
 
-    async def test_console_works_while_session_is_uncertain(self) -> None:
-        """读日志是只读动作：会话处于不确定态时仍然读得到。
-
-        与 ``observe`` / 截图同一条理由（见 ``session.execute`` 的
-        ``allow_uncertain``）：读日志不改变页面状态，没有"重复点击/重复提交"
-        的风险，所以它不该被不确定态挡住 —— 否则用户在出问题时恰恰读不到日志。
-
-        做法：先用一次结果未知的 observe 把会话打成不确定态，再读日志。
-        若 ``read_console`` 漏传 ``allow_uncertain=True``，这里会抛
-        ``BskOutcomeUnknown``（code=session_uncertain）而不是正常返回。
-        """
+    async def test_console_works_after_outcome_unknown(self) -> None:
+        """会话在遭遇结果未知错误后，后续读取日志操作依然可以正常执行。"""
         from bsk.errors import BskOutcomeUnknown
 
         class UncertainRunner(ConsolePayloadRunner):
@@ -2870,17 +2861,14 @@ class TestReadConsoleAndNetwork(ServiceIntegrationCase):
 
         with self.assertRaises(BskOutcomeUnknown):
             await service.observe("umo-1")
-        # 前提成立：会话确实进入了不确定态。
-        entry = service.sessions._entries["umo-1"]  # noqa: SLF001 - 断言内部状态
-        self.assertTrue(entry.session.uncertain, "前置条件没成立，用例失效")
 
         log = await service.read_console("umo-1")
 
         self.assertEqual(log.entries, [])
         self.assertEqual(len(runner.calls_for("console")), 1)
 
-    async def test_network_works_while_session_is_uncertain(self) -> None:
-        """同上，network 那条路径也必须声明只读。"""
+    async def test_network_works_after_outcome_unknown(self) -> None:
+        """同上，遭遇结果未知后读取网络日志依然可以正常执行。"""
         from bsk.errors import BskOutcomeUnknown
 
         class UncertainRunner(ConsolePayloadRunner):

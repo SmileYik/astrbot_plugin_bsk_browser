@@ -2293,8 +2293,6 @@ class BskBrowserPlugin(Star):
             flags = []
             if cur.get("busy"):
                 flags.append("正在执行命令")
-            if cur.get("uncertain"):
-                flags.append("上一步结果不确定")
             flag_text = f"（{', '.join(flags)}）" if flags else ""
             lines.append(
                 f"本对话的浏览器会话：{session_id}{idle_text}{flag_text}"

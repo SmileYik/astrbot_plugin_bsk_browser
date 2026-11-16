@@ -773,7 +773,6 @@ class BskService:
                 timeout=self._timeout(TIMEOUT_OBSERVE),
                 raise_on_error=True,
             ),
-            allow_uncertain=True,
         )
         observation = parse_observation(
             result.data if isinstance(result.data, dict) else {}
@@ -928,8 +927,6 @@ class BskService:
             key,
             action_fn,
             timeout=timeout,
-            # 写类动作绝不允许在不确定态下执行 —— 那可能造成重复点击/重复提交。
-            allow_uncertain=False,
         )
         return self._render_action_result(action, target, result.data)
 
@@ -1084,13 +1081,6 @@ class BskService:
                 2. bsk 进程本身的失败（超时、会话没了、扩展断了等），
                    由 ``SessionManager.execute`` 按退出码抛出，原样冒泡。
 
-        Note:
-            ``allow_uncertain=True``：求值本身可能是只读的，但不是
-            必然只读（模型可以传一段会改页面的 JS）。这里持保守立场 ——
-            上一次操作结果未知时，宁愿拒绝执行任意脚本，也不要在一个状态
-            不明的页面上跑一段"不知道会做什么"的 JS。理由：不确定态下的
-            脚本很可能是上一次失败操作的重复（例如重复提交）。所以这个
-            参数刻意传 False（默认值），与 click/fill 同一档。
         """
         session_key = self._resolve_key(key)
         result = await self.sessions.execute_action(
@@ -1101,8 +1091,6 @@ class BskService:
                 timeout=self._timeout(TIMEOUT_EVALUATE),
                 raise_on_error=True,
             ),
-            # 写类动作的待遇：不确定态下不执行任意 JS（见 docstring 的 Note）。
-            allow_uncertain=False,
         )
         return self._check_evaluate_result(result.data, expression, self._logger)
 
@@ -1456,7 +1444,6 @@ class BskService:
             session_key,
             lambda sid: ["console", "--since", str(int(since)), "--session", sid, "--json"],
             timeout=self._timeout(TIMEOUT_QUICK),
-            allow_uncertain=True,
         )
         return ConsoleLog.from_json(result.data if isinstance(result.data, dict) else {})
 
@@ -1471,7 +1458,6 @@ class BskService:
             session_key,
             lambda sid: ["network", "--since", str(int(since)), "--session", sid, "--json"],
             timeout=self._timeout(TIMEOUT_QUICK),
-            allow_uncertain=True,
         )
         return ConsoleLog.from_json(result.data if isinstance(result.data, dict) else {})
 
@@ -2005,7 +1991,6 @@ class BskService:
                 timeout=timeout,
                 raise_on_error=True,
             ),
-            allow_uncertain=True,
         )
         observation = parse_observation(
             result.data if isinstance(result.data, dict) else {}
@@ -2062,7 +2047,6 @@ class BskService:
             session_key,
             lambda sid: args + ["--session", sid, "--json"],
             timeout=timeout,
-            allow_uncertain=False,
         )
         observation = parse_observation(
             result.data if isinstance(result.data, dict) else {}
@@ -2217,8 +2201,6 @@ class BskService:
                     timeout=self._timeout(TIMEOUT_NAVIGATE),
                     raise_on_error=True,
                 ),
-                # 超时下限复用 navigate 那一档（45s，必须大于 bsk 自己的 30s）。
-                allow_uncertain=False,
             )
 
         try:
@@ -2280,7 +2262,6 @@ class BskService:
                 timeout=self._timeout(TIMEOUT_NAVIGATE),
                 raise_on_error=True,
             ),
-            allow_uncertain=False,
         )
         parsed = NavigateResult.from_json(result.data)
         self._session_observations.pop(session_key, None)
@@ -2319,7 +2300,6 @@ class BskService:
                 timeout=self._timeout(TIMEOUT_HISTORY),
                 raise_on_error=True,
             ),
-            allow_uncertain=False,
         )
         parsed = NavigateResult.from_json(result.data)
         self._session_observations.pop(session_key, None)
@@ -2344,11 +2324,6 @@ class BskService:
         命令形式（CLI 报告 §33）::
 
             bsk wait-for-navigation --wait-until <W> --timeout <T> --session <ID> --json
-
-        Note:
-            这是**只读**的（不改页面状态），所以 ``allow_uncertain=True``：
-            上一次操作结果未知时，正是最需要"等一等看页面有没有自己稳定下来"
-            的时候。
         """
         session_key = self._resolve_key(key)
         result = await self.sessions.execute_action(
@@ -2361,7 +2336,6 @@ class BskService:
                 timeout=self._wait_timeout(timeout_ms),
                 raise_on_error=True,
             ),
-            allow_uncertain=True,
         )
         parsed = NavigateResult.from_json(result.data)
         self._session_observations.pop(session_key, None)
@@ -2425,8 +2399,6 @@ class BskService:
         命令形式（CLI 报告 §11）::
 
             bsk snapshot --max-depth <N> --max-tokens <N> --session <ID> --json
-
-        只读，所以 ``allow_uncertain=True``（与 ``observe`` 同一条理由）。
         """
         session_key = self._resolve_key(key)
         result = await self.sessions.execute_action(
@@ -2439,7 +2411,6 @@ class BskService:
                 timeout=self._timeout(TIMEOUT_OBSERVE),
                 raise_on_error=True,
             ),
-            allow_uncertain=True,
         )
         data = result.data if isinstance(result.data, dict) else {}
         raw_text = data.get("text")
@@ -2484,7 +2455,6 @@ class BskService:
                 timeout=self._timeout(TIMEOUT_OBSERVE),
                 raise_on_error=True,
             ),
-            allow_uncertain=True,
         )
         data = result.data if isinstance(result.data, dict) else {}
         html = data.get("html")
@@ -2535,7 +2505,6 @@ class BskService:
                 raise_on_error=True,
             ),
             timeout=timeout,
-            allow_uncertain=True,
         )
         return ConsoleLog.from_json(result.data if isinstance(result.data, dict) else {})
 
@@ -2571,7 +2540,6 @@ class BskService:
                 raise_on_error=True,
             ),
             timeout=timeout,
-            allow_uncertain=True,
         )
         return ConsoleLog.from_json(result.data if isinstance(result.data, dict) else {})
 
@@ -2591,24 +2559,6 @@ class BskService:
             （TOOL-SPEC §2 的硬要求）。理由：debug 的输出形态由 action 决定
             （列表、单条 body 切片、导出路径、等待结果……），任何"统一化"
             都会丢掉模型真正要看的东西。
-
-        Note:
-            **``allow_uncertain`` 按 action 分级**（安全设计，不能一刀切）：
-
-            - :data:`MUTATING_DEBUG_ACTIONS` 里的 5 个 —— ``replay`` /
-              ``rule_add`` / ``rule_enable`` / ``rule_disable`` /
-              ``rule_remove`` —— 一律 ``allow_uncertain=False``。
-              ``replay`` 会**带着用户的 cookie 重新发送**抓到的请求
-              （DSH 自己的描述就是 "may change server data"），
-              规则类 action 能改写/伪造真实流量。它们和 click/fill 同一档：
-              上一次结果未知时重复执行，可能造成重复提交或伪造流量。
-            - 其余（``performance`` / ``requests`` / ``console`` /
-              ``export`` / ``capabilities`` / ``wait`` …）只读证据或等待，
-              ``allow_uncertain=True`` —— 页面状态不明时恰恰最需要看这些。
-
-            （早先这里写过"replay 不属于写操作"的论证，那是错的：判断标准
-            不是"BSK 服务端会不会自己校验"，而是"重放一次会不会改变外部
-            可见的状态"。会变的就必须挡住。）
 
         Note:
             ``wait`` 的超时不能走常规规则。``wait_ms`` 的合法上限是
@@ -2634,7 +2584,6 @@ class BskService:
         explicit_tab_id = opts.pop("tab_id", None)
         id_arg = opts.pop("id", None)
 
-        readonly = action not in MUTATING_DEBUG_ACTIONS
         timeout = (
             self._wait_timeout(self._coerce_wait_ms(opts.get("wait_ms")))
             if action == "wait"
@@ -2653,7 +2602,6 @@ class BskService:
                 **opts,
             ),
             timeout=timeout,
-            allow_uncertain=readonly,
         )
         return result.data
 
@@ -2716,10 +2664,6 @@ class BskService:
 
         Returns:
             {"session": str, "tab_id": int|None, ...该 action 的结果字段}
-
-        Note:
-            写类动作必须传 allow_uncertain=False 给 sessions.execute
-            （安全设计，见 TOOL-SPEC H4）。
 
         Note:
             与既有 :meth:`act` 的分工：``act`` 只覆盖 13 个"动作 + 按键/滚动"
@@ -2789,9 +2733,6 @@ class BskService:
                     **opts,
                 ),
                 timeout=timeout,
-                # 写类动作（click/fill/press/select/hover）绝不允许在不确定态下执行
-                # —— 那可能造成重复点击、重复提交。
-                allow_uncertain=readonly,
             )
 
         async def _run_scroll() -> Any:
@@ -2806,7 +2747,6 @@ class BskService:
                     raise_on_error=True,
                 ),
                 timeout=scroll_timeout,
-                allow_uncertain=True,
             )
 
         try:
@@ -3134,7 +3074,6 @@ class BskService:
                     raise_on_error=True,
                 ),
                 timeout=timeout,
-                allow_uncertain=False,
             )
         elif action == "create":
             result = await self.sessions.execute_action(
@@ -3148,7 +3087,6 @@ class BskService:
                     raise_on_error=True,
                 ),
                 timeout=timeout,
-                allow_uncertain=False,
             )
         elif action == "select":
             if target_tab_id is None or target_tab_id == "":
@@ -3157,7 +3095,6 @@ class BskService:
                 session_key,
                 lambda sid: self.cli.select_tab(sid, int(target_tab_id), timeout=timeout, raise_on_error=True),
                 timeout=timeout,
-                allow_uncertain=False,
             )
         elif action == "borrow":
             if target_tab_id is None or target_tab_id == "":
@@ -3166,7 +3103,6 @@ class BskService:
                 session_key,
                 lambda sid: self.cli.borrow_tab(sid, int(target_tab_id), timeout=timeout, raise_on_error=True),
                 timeout=timeout,
-                allow_uncertain=False,
             )
         elif action == "return":
             if target_tab_id is None or target_tab_id == "":
@@ -3175,7 +3111,6 @@ class BskService:
                 session_key,
                 lambda sid: self.cli.return_tab(sid, int(target_tab_id), timeout=timeout, raise_on_error=True),
                 timeout=timeout,
-                allow_uncertain=False,
             )
         else:
             raise BskError(
@@ -3358,8 +3293,6 @@ class BskService:
                 raise_on_error=True,
             ),
             timeout=timeout,
-            # 改窗口尺寸不碰页面数据，不确定态下做它是安全的。
-            allow_uncertain=True,
         )
         data = result.data if isinstance(result.data, dict) else {}
         return {
@@ -3418,7 +3351,6 @@ class BskService:
                 raise_on_error=True,
             ),
             timeout=timeout,
-            allow_uncertain=True,
         )
         data = result.data if isinstance(result.data, dict) else {}
         return {
@@ -3482,8 +3414,6 @@ class BskService:
             # 所以外层超时必须比 bsk 自己的预算（--timeout，默认 5m）更大，
             # 否则我们会在人还没做完的时候先把它掐掉。
             timeout=timeout,
-            # 只读：它不改页面，只是显示一个面板并等人。
-            allow_uncertain=True,
         )
         data = result.data if isinstance(result.data, dict) else {}
         outcome = data.get("outcome")
@@ -3562,8 +3492,6 @@ class BskService:
                     raise_on_error=True,
                 ),
                 timeout=timeout,
-                # 截图是只读动作（但全页滚动在底层可能受操作安全护栏保护）。
-                allow_uncertain=True,
             )
 
         try:
@@ -3716,17 +3644,11 @@ MUTATING_DEBUG_ACTIONS: frozenset[str] = frozenset(
         "replay",
     }
 )
-"""``bsk debug`` 里**会改变服务端数据/真实流量**的 action。
+"""``bsk debug`` 里会改变服务端数据/真实流量的 action。
 
-它们不能用 ``allow_uncertain=True``（见 :meth:`BskService.debug`）：
-
-- ``replay`` —— 会**带着用户的 cookie 重新发送**抓到的请求，DSH 自己的描述
-  就是 "may change server data"；
+- ``replay`` —— 会带着用户的 cookie 重新发送抓到的请求；
 - ``rule_add`` / ``rule_enable`` / ``rule_disable`` / ``rule_remove`` ——
   能改写/伪造真实请求与响应。
-
-其余 action（``performance`` / ``requests`` / ``console`` / ``export`` /
-``capabilities`` / ``wait`` …）都只是读证据或等待，属于只读。
 """
 
 
